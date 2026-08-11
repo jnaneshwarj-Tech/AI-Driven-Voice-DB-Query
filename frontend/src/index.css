@@ -1,0 +1,100 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Global smooth theme transitions ─────────────────────────────────────── */
+*, *::before, *::after {
+  transition-property: background-color, border-color, color, fill, stroke, box-shadow;
+  transition-duration: 200ms;
+  transition-timing-function: ease;
+}
+
+/* Disable transitions on elements that shouldn't animate (e.g. spinners) */
+.no-transition, .no-transition * {
+  transition: none !important;
+}
+
+@layer base {
+  /* Light mode defaults */
+  :root {
+    --bg-primary:   #f8fafc;
+    --bg-card:      #ffffff;
+    --bg-sidebar:   #0f172a;
+    --text-primary: #0f172a;
+    --text-muted:   #64748b;
+    --border:       #e2e8f0;
+  }
+
+  body {
+    @apply bg-slate-50 text-slate-900;
+  }
+
+  /* Dark mode overrides applied to <html class="dark"> */
+  html.dark body {
+    @apply bg-slate-950 text-slate-100;
+  }
+}
+
+/* ── Dark mode component overrides ──────────────────────────────────────── */
+html.dark .dash-main        { @apply bg-slate-950; }
+html.dark .dash-card        { @apply bg-slate-900 border-slate-700; }
+html.dark .dash-header      { @apply bg-slate-900 border-slate-700; }
+html.dark .dash-input       { @apply bg-slate-800 border-slate-600 text-slate-100 placeholder-slate-400; }
+html.dark .dash-table-head  { @apply bg-slate-800 border-slate-700; }
+html.dark .dash-table-row   { @apply hover:bg-slate-800/60; }
+html.dark .dash-table-cell  { @apply text-slate-300 border-slate-700; }
+html.dark .dash-modal       { @apply bg-slate-900 border-slate-700; }
+html.dark .dash-dropdown    { @apply bg-slate-900 border-slate-700; }
+html.dark .dash-badge-blue  { @apply bg-blue-900/40 text-blue-300 border-blue-700; }
+html.dark .dash-text-muted  { @apply text-slate-400; }
+html.dark .dash-divider     { @apply border-slate-700; }
+
+/* ── Custom scrollbar ────────────────────────────────────────────────────── */
+::-webkit-scrollbar        { width: 6px; height: 6px; }
+::-webkit-scrollbar-track  { background: transparent; }
+::-webkit-scrollbar-thumb  { background: #475569; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #64748b; }
+
+html.dark ::-webkit-scrollbar-thumb { background: #334155; }
+html.dark ::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+/* ── Glassmorphism card ───────────────────────────────────────────────────── */
+.glass-card {
+  background: rgba(255,255,255,0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255,255,255,0.3);
+}
+html.dark .glass-card {
+  background: rgba(15,23,42,0.7);
+  border: 1px solid rgba(255,255,255,0.08);
+}
+
+/* ── Shimmer loading animation ───────────────────────────────────────────── */
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+.shimmer {
+  background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s infinite;
+}
+html.dark .shimmer {
+  background: linear-gradient(90deg, #1e293b 25%, #334155 50%, #1e293b 75%);
+  background-size: 200% 100%;
+}
+
+/* ── Slide-down animation for dropdown ───────────────────────────────────── */
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.slide-down { animation: slideDown 0.15s ease-out; }
+
+/* ── Toast slide-in ──────────────────────────────────────────────────────── */
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(24px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.toast-enter { animation: slideInRight 0.25s ease-out; }

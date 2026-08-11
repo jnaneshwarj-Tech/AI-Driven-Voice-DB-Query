@@ -1,0 +1,65 @@
+{
+    "tables": {
+        "student_personal": {
+            "description": "Core identity details of a student.",
+            "columns": {
+                "student_id": "SERIAL PRIMARY KEY",
+                "usn": "VARCHAR(100) UNIQUE. University Seat Number. Used to search for specific students.",
+                "first_name": "VARCHAR(50)",
+                "last_name": "VARCHAR(50)",
+                "email": "VARCHAR(100)",
+                "phone": "VARCHAR(20)",
+                "address": "TEXT",
+                "current_sem": "INT. Current active semester (calculated).",
+                "status": "VARCHAR. 'ACTIVE' or 'GRADUATED'",
+                "extra_data": "JSON. Additional unmapped data."
+            }
+        },
+        "student_academic": {
+            "description": "Academic enrollment details for a student.",
+            "columns": {
+                "academic_id": "SERIAL PRIMARY KEY",
+                "student_id": "INT. FK to student_personal.student_id",
+                "department": "VARCHAR(50). Example: CSE, ECE.",
+                "admission_year": "INT",
+                "current_semester": "INT"
+            }
+        },
+        "semester_gpa": {
+            "description": "GPA records per semester for a student.",
+            "columns": {
+                "gpa_id": "SERIAL PRIMARY KEY",
+                "student_id": "INT. FK to student_personal.student_id",
+                "semester": "INT",
+                "sgpa": "DECIMAL. Semester GPA.",
+                "cgpa": "DECIMAL. Cumulative GPA."
+            }
+        },
+        "marks": {
+            "description": "Subject-level marks for a student.",
+            "columns": {
+                "mark_id": "SERIAL PRIMARY KEY",
+                "student_id": "INT. FK to student_personal.student_id",
+                "semester": "INT",
+                "subject_name": "VARCHAR(100)",
+                "internal_marks": "INT",
+                "external_marks": "INT",
+                "total_marks": "INT"
+            }
+        },
+        "semester": {
+            "description": "Semester tracking data.",
+            "columns": {
+                "student_id": "INT. FK to student",
+                "usn": "VARCHAR",
+                "name": "VARCHAR",
+                "semester": "INT"
+            }
+        }
+    },
+    "relationships": [
+        "student_personal.student_id = student_academic.student_id",
+        "student_personal.student_id = semester_gpa.student_id",
+        "student_personal.student_id = marks.student_id"
+    ]
+}

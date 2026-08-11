@@ -1,0 +1,15 @@
+fastapi
+uvicorn
+mysql-connector-python
+pandas
+reportlab
+openpyxl
+python-jose[cryptography]
+python-dotenv
+requests
+python-multipart
+pydantic
+pydantic-settings
+bcrypt
+email-validator
+apscheduler==3.10.4

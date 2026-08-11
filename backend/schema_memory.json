@@ -1,0 +1,182 @@
+{
+    "father_name": [
+        "father_name",
+        "Father Name"
+    ],
+    "cgpa": [
+        "cgpa",
+        "CGPA %"
+    ],
+    "extra_column": [
+        "extra_column",
+        "Extra column"
+    ],
+    "usn": [
+        "usn",
+        "USN"
+    ],
+    "name": [
+        "name",
+        "Name"
+    ],
+    "semesterone": [
+        "col_1stsem",
+        "1st_sem"
+    ],
+    "semestertwo": [
+        "col_2ndsem",
+        "2nd_sem"
+    ],
+    "semesterthree": [
+        "col_3rdsem",
+        "3rd_sem"
+    ],
+    "semesterfour": [
+        "col_4thsem",
+        "4th_sem"
+    ],
+    "semesterfive": [
+        "col_5thsem",
+        "5th_sem"
+    ],
+    "unnamed3": [
+        "unnamed3"
+    ],
+    "unnamed4": [
+        "unnamed4"
+    ],
+    "unnamed6": [
+        "unnamed6"
+    ],
+    "unnamed7": [
+        "unnamed7"
+    ],
+    "unnamed9": [
+        "unnamed9"
+    ],
+    "unnamed10": [
+        "unnamed10"
+    ],
+    "unnamed12": [
+        "unnamed12"
+    ],
+    "unnamed13": [
+        "unnamed13"
+    ],
+    "unnamed15": [
+        "unnamed15"
+    ],
+    "unnamed16": [
+        "unnamed16"
+    ],
+    "unnamed18": [
+        "unnamed18"
+    ],
+    "unnamed21": [
+        "unnamed21"
+    ],
+    "unnamed22": [
+        "unnamed22"
+    ],
+    "mathematics": [
+        "mathematicsbmats101",
+        "mathematics(bmats101)"
+    ],
+    "grade": [
+        "grade"
+    ],
+    "gradecredit": [
+        "gradecredit",
+        "grade_*_credit"
+    ],
+    "physics": [
+        "physicsbphys102",
+        "physics_(bphys102)"
+    ],
+    "mathematicsgrade": [
+        "grade1",
+        "grade.1"
+    ],
+    "mathematicsgradecredit": [
+        "gradecredit1",
+        "grade_*_credit.1"
+    ],
+    "programmingusingc": [
+        "principalofprogrammingusingcbpops103",
+        "principal_of_programming_using_c_(bpops103)"
+    ],
+    "physicsgrade": [
+        "grade2",
+        "grade.2"
+    ],
+    "physicsgradecredit": [
+        "gradecredit2",
+        "grade_*_credit.2"
+    ],
+    "communicativeenglish": [
+        "communicativeenglishbengk106",
+        "communicative_english_(bengk106)"
+    ],
+    "programmingusingcgrade": [
+        "grade3",
+        "grade.3"
+    ],
+    "programmingusingcgradecredit": [
+        "gradecredit3",
+        "grade_*_credit.3"
+    ],
+    "samskrutikakannada": [
+        "samskrutikakannadabkskk107",
+        "samskrutika_kannada_(bkskk107)"
+    ],
+    "communicativeenglishgrade": [
+        "grade4",
+        "grade.4"
+    ],
+    "communicativeenglishgradecredit": [
+        "gradecredit4",
+        "grade_*_credit.4"
+    ],
+    "innovationanddesignthinking": [
+        "innovationanddesignthinkingbidtx58",
+        "innovation_and_design_thinking_(bidtx58)"
+    ],
+    "samskrutikakannadagrade": [
+        "grade5",
+        "grade.5"
+    ],
+    "samskrutikakannadagradecredit": [
+        "gradecredit5",
+        "grade_*_credit.5"
+    ],
+    "electronicsengineering": [
+        "introductiontoelectronicsengineeringbesck104c",
+        "introduction_to_electronics_engineering_(besck104c)"
+    ],
+    "innovationanddesignthinkinggrade": [
+        "grade6",
+        "grade.6"
+    ],
+    "innovationanddesignthinkinggradecredit": [
+        "gradecredit6",
+        "grade_*_credit.6"
+    ],
+    "cybersecurity": [
+        "introductiontocybersecuritybetck105i",
+        "introduction_to_cyber_security_(betck105i)"
+    ],
+    "electronicsengineeringgrade": [
+        "grade7",
+        "grade.7"
+    ],
+    "electronicsengineeringgradecredit": [
+        "gradecredit7",
+        "grade_*_credit.7"
+    ],
+    "total": [
+        "total"
+    ],
+    "sgpa": [
+        "sgpa"
+    ]
+}

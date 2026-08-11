@@ -1,0 +1,1 @@
+{"sessionId": "29bcae", "runId": "registration_run1", "hypothesisId": "H1", "location": "routes_auth.py", "message": "register_user_called", "data": {"username": "manoj", "email": "manojjr183@gmail.com", "role": "Admin"}, "timestamp": 1773418324594}
