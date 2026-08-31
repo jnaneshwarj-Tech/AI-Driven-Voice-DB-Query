@@ -14,7 +14,10 @@ import { useToast } from '../components/Toast';
 import OperationResultModal from '../components/OperationResultModal';
 import ActivityDashboard from '../components/ActivityDashboard';
 import BackupRestore from '../components/BackupRestore';
+import CombinedStudentView from '../components/CombinedStudentView';
+import LanguageSelector from '../components/LanguageSelector';
 import { useTheme } from '../context/ThemeContext';
+import { getPlaceholderText, getExampleQueries, hasKannadaScript } from '../utils/kannadaTransliteration';
 import {
   LogOut, History, Database, Mic, Send, AlertTriangle,
   Download, FileText, Table as TableIcon,
@@ -350,6 +353,16 @@ export default function Dashboard() {
   const [activeSuggestion, setActiveSuggestion] = useState(-1);
   const [liveSearchTerm, setLiveSearchTerm] = useState('');
   const [opResult, setOpResult]     = useState(null);  // OperationResultModal data
+  
+  // ── Language State ────────────────────────────────────────────────────────
+  const [selectedLanguage, setSelectedLanguage] = useState(() => {
+    // Restore from localStorage or default to English
+    return localStorage.getItem('queryLanguage') || 'english';
+  });
+  const [voiceLanguage, setVoiceLanguage] = useState(() => {
+    return localStorage.getItem('voiceLanguage') || 'en-US';
+  });
+  
   const recRef = useRef(null);
   const printRef = useRef(null);
   const dropdownRef = useRef(null);
@@ -464,6 +477,28 @@ export default function Dashboard() {
     localStorage.clear(); navigate('/login');
   };
 
+  // ── Language Handling ─────────────────────────────────────────────────────
+  const handleLanguageChange = (lang) => {
+    setSelectedLanguage(lang);
+    localStorage.setItem('queryLanguage', lang);
+    
+    // Update voice language accordingly
+    const voiceLangMap = {
+      'english': 'en-US',
+      'kannada': 'kn-IN',
+      'mixed': 'en-US', // Default to English for mixed, user can override
+    };
+    const newVoiceLang = voiceLangMap[lang] || 'en-US';
+    setVoiceLanguage(newVoiceLang);
+    localStorage.setItem('voiceLanguage', newVoiceLang);
+  };
+
+  const handleVoiceLanguageChange = (lang) => {
+    setVoiceLanguage(lang);
+    localStorage.setItem('voiceLanguage', lang);
+  };
+
+
   // ── Voice input ─────────────────────────────────────────────────────────────
   const toggleListen = () => {
     if (isListening) { recRef.current?.stop(); setIsListening(false); return; }
@@ -471,10 +506,18 @@ export default function Dashboard() {
     if (!SR) { setError('Speech recognition not supported in this browser.'); return; }
     const rec = new SR();
     recRef.current = rec;
-    rec.continuous = false; rec.interimResults = false; rec.lang = 'en-US';
+    rec.continuous = false; rec.interimResults = false; 
+    rec.lang = voiceLanguage; // Use selected voice language
     rec.onstart  = () => setIsListening(true);
     rec.onresult = (e) => { setQuery(e.results[0][0].transcript); setIsListening(false); };
-    rec.onerror  = (e) => { setIsListening(false); setError('Mic error: ' + e.error); };
+    rec.onerror  = (e) => { 
+      setIsListening(false); 
+      if (e.error === 'not-allowed') {
+        setError('Microphone permission denied. Please allow microphone access.');
+      } else {
+        setError('Voice input failed. Please try again.');
+      }
+    };
     rec.onend    = () => setIsListening(false);
     rec.start();
   };
@@ -721,9 +764,44 @@ export default function Dashboard() {
   };
 
   const data = results?.data || [];
-  const showGpa     = isGpaData(data);
-  const showGeneric = !showGpa && data.length > 0;
+
+  const keys = new Set();
+  for (let i = 0; i < Math.min(5, data.length); i++) {
+    Object.keys(data[i]).forEach(k => keys.add(k.toLowerCase()));
+  }
+  const hasAcademic = keys.has('sgpa') || keys.has('cgpa') || keys.has('semester');
+  const hasPersonal = keys.has('father_name') || keys.has('dob') || keys.has('address')
+    || keys.has('phone') || keys.has('email') || keys.has('blood_group') || keys.has('gender');
+
+  const q = (results?._query || '').toLowerCase();
+
+  // Sprint 2: Detect complete-profile intent (English + Kannada)
+  const COMPLETE_PROFILE_RE = /\b(everything\s+about|complete\s+information|full\s+information|complete\s+details|full\s+details|entire\s+profile|all\s+information|all\s+about|show\s+everything|full\s+profile|complete\s+profile|student\s+profile|both\s+academic|academic\s+and\s+personal)\b/i;
+
+  const isCompleteProfileIntent = (
+    results?.intent === 'complete_profile' ||
+    COMPLETE_PROFILE_RE.test(q) ||
+    (results?._profile !== undefined)
+  );
+
+  // Single-student result detection
+  const isSingleStudent = (() => {
+    const usns = new Set(data.map(r => r.usn).filter(Boolean));
+    return usns.size === 1;
+  })();
+
+  // Show CombinedStudentView when complete-profile intent OR single student with both data types
+  const showCombined = data.length > 0 && (
+    isCompleteProfileIntent ||
+    (isSingleStudent && hasAcademic && hasPersonal)
+  );
+  const showGpa     = !showCombined && isGpaData(data);
+  const showGeneric = !showCombined && !showGpa && data.length > 0;
   const showChart   = data.length > 0 && shouldShowChart(results?._query || '');
+
+  // Sprint 2: Track response language for Kannada label support
+  const responseLanguage = results?.response_language || 'english';
+
 
   return (
     <div className="flex h-screen bg-slate-50 overflow-hidden">
@@ -959,6 +1037,47 @@ export default function Dashboard() {
 
                 {/* Query input */}
                 <div className="relative z-50">
+                  {/* Language and Voice Selectors */}
+                  <div className="flex items-center gap-3 mb-3">
+                    {/* Language Selector */}
+                    <LanguageSelector 
+                      selectedLanguage={selectedLanguage}
+                      onLanguageChange={handleLanguageChange}
+                    />
+                    
+                    {/* Voice Language Selector */}
+                    <div className="relative">
+                      <select
+                        value={voiceLanguage}
+                        onChange={(e) => handleVoiceLanguageChange(e.target.value)}
+                        className="appearance-none pl-9 pr-8 py-2 text-sm font-medium bg-white border border-slate-200 rounded-lg hover:border-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-400 transition-all cursor-pointer text-slate-700"
+                        title="Select voice input language"
+                      >
+                        <option value="en-US">🎤 English</option>
+                        <option value="kn-IN">🎤 ಕನ್ನಡ</option>
+                        <option value="en-IN">🎤 English (India)</option>
+                      </select>
+                      <div className="absolute left-3 top-1/2 transform -translate-y-1/2 pointer-events-none">
+                        <Mic className="w-4 h-4 text-slate-400" />
+                      </div>
+                      <div className="absolute right-2 top-1/2 transform -translate-y-1/2 pointer-events-none">
+                        <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </div>
+                    </div>
+                    
+                    {/* Language indicator badge */}
+                    {selectedLanguage !== 'english' && (
+                      <div className="flex-1 flex items-center gap-2">
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-gradient-to-r from-orange-50 to-amber-50 text-orange-700 border border-orange-200">
+                          <span className="w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse"></span>
+                          {selectedLanguage === 'kannada' ? 'ಕನ್ನಡ Mode' : 'Mixed Language Mode'}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                  
                   <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-2 focus-within:ring-2 focus-within:ring-blue-500 transition-all">
                     <form onSubmit={handleQuerySubmit} className="relative flex items-end">
                       <textarea value={query} 
@@ -974,7 +1093,7 @@ export default function Dashboard() {
                           if (error) setError('');
                           if (noMatchMsg) setNoMatchMsg('');
                         }}
-                        placeholder='Ask anything... "Show marks of Manoj", "Top 10 students of sem 3", "CGPA of all students"'
+                        placeholder={getPlaceholderText(selectedLanguage)}
                         className="w-full resize-none p-4 pb-12 outline-none text-slate-700 placeholder-slate-400 bg-transparent min-h-[90px] text-sm"
                         onKeyDown={e => { 
                           if (showLiveDropdown && liveSuggestions.length > 0) {
@@ -1009,10 +1128,15 @@ export default function Dashboard() {
                       />
                       <div className="absolute bottom-3 left-3 flex items-center gap-2">
                         <button type="button" onClick={toggleListen}
-                          className={`p-2 rounded-xl transition-all ${isListening ? 'bg-red-100 text-red-600 animate-pulse' : 'bg-slate-100 text-slate-500 hover:bg-blue-50 hover:text-blue-600'}`}>
+                          className={`p-2 rounded-xl transition-all ${isListening ? 'bg-red-100 text-red-600 animate-pulse' : 'bg-slate-100 text-slate-500 hover:bg-blue-50 hover:text-blue-600'}`}
+                          title={`Voice input (${voiceLanguage === 'kn-IN' ? 'Kannada' : 'English'})`}>
                           <Mic className="w-4 h-4" />
                         </button>
-                        {isListening && <span className="text-xs text-red-500 animate-pulse font-medium">Listening...</span>}
+                        {isListening && (
+                          <span className="text-xs text-red-500 animate-pulse font-medium">
+                            {voiceLanguage === 'kn-IN' ? 'ಆಲಿಸುತ್ತಿದೆ...' : 'Listening...'}
+                          </span>
+                        )}
                       </div>
                       <div className="absolute bottom-3 right-3">
                         <button type="submit" disabled={isLoading || !query.trim()}
@@ -1024,6 +1148,22 @@ export default function Dashboard() {
                       </div>
                     </form>
                   </div>
+
+                  {/* Language-aware example queries */}
+                  {!query && !results && (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <span className="text-xs text-slate-400 font-medium">Try:</span>
+                      {getExampleQueries(selectedLanguage).map((example, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => setQuery(example)}
+                          className="px-3 py-1.5 text-xs bg-slate-50 hover:bg-blue-50 border border-slate-200 hover:border-blue-300 rounded-lg text-slate-600 hover:text-blue-700 transition-all"
+                        >
+                          {example}
+                        </button>
+                      ))}
+                    </div>
+                  )}
 
                   {/* Live Suggestions Dropdown */}
                   {showLiveDropdown && liveSuggestions.length > 0 && (
@@ -1156,11 +1296,21 @@ export default function Dashboard() {
                             <span className={`inline-flex items-center gap-1 px-2 py-1 text-[10px] font-bold rounded-full border ${
                               results.intent === 'personal'
                                 ? 'bg-purple-50 text-purple-700 border-purple-200'
+                                : results.intent === 'complete_profile'
+                                ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
                                 : 'bg-blue-50 text-blue-700 border-blue-200'
                             }`}>
                               {results.intent === 'personal'
                                 ? <><User className="w-3 h-3" /> Personal View</>
+                                : results.intent === 'complete_profile'
+                                ? <><GraduationCap className="w-3 h-3" /> Complete Profile</>
                                 : <><GraduationCap className="w-3 h-3" /> Academic View</>}
+                            </span>
+                          )}
+                          {/* Kannada indicator */}
+                          {responseLanguage !== 'english' && (
+                            <span className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-bold rounded-full border bg-orange-50 text-orange-700 border-orange-200">
+                              ಕ•KN
                             </span>
                           )}
                           {[['csv',   <FileText className="w-3 h-3" />,    'CSV'],
@@ -1187,6 +1337,7 @@ export default function Dashboard() {
                     )}
 
                     <div className="p-5 space-y-4">
+                      {showCombined && <CombinedStudentView data={data} responseLanguage={responseLanguage} />}
                       {showGpa && <GpaTable data={data} />}
                       {showGeneric && <GenericTable data={data} />}
                       {showChart && <ResultChart data={data} query={results._query} />}

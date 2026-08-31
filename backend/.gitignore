@@ -1,25 +1,21 @@
-node_modules/
-dist/
-build/
-*.log
-.env
 # Environment variables
 .env
 *.env
 
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
+# Python virtual environment
 .venv/
 venv/
+
+# Python cache
+__pycache__/
+*.pyc
 
 # Node
 node_modules/
 
-# Build
+# Build files
 dist/
 build/
 
-# VS Code
+# IDE
 .vscode/

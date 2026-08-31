@@ -524,8 +524,18 @@ def smart_fallback(natural_query: str) -> dict:
     """
     Called when SQL returns 0 results.
     Returns structured suggestion for the multi-choice interaction.
+    Sprint 2: Multilingual (Kannada/English/Mixed) support.
     """
-    term = extract_search_term(natural_query)
+    # Sprint 2: Try multilingual term extraction first
+    try:
+        from kannada_processor import extract_search_term_multilingual, detect_language
+        lang = detect_language(natural_query)
+        if lang in ('kannada', 'mixed'):
+            term = extract_search_term_multilingual(natural_query)
+        else:
+            term = extract_search_term(natural_query)
+    except Exception:
+        term = extract_search_term(natural_query)
 
     _empty = {
         'type': 'no_match',

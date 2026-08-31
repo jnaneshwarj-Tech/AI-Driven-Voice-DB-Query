@@ -2,10 +2,12 @@
 rag_sql_generator.py
 Natural language → MySQL SQL using NVIDIA LLM.
 Rules: cumulative CGPA, default USN sort, NLP synonyms, schema memory.
+Sprint 2: Kannada language support + complete student profile queries.
 """
 from llm_service import llm_service
 from database import db_conn
 import re
+from kannada_processor import normalize_query, build_language_context, is_complete_profile_intent
 
 
 def _load_schema_context() -> str:
@@ -202,6 +204,30 @@ SQL: SELECT s.* FROM students s WHERE s.name LIKE '%manoj%';
 Q: show all details of USN 4HG23CS032
 SQL: SELECT s.* FROM students s WHERE s.usn = '4HG23CS032';
 
+Q: show everything about Manoj
+SQL: SELECT s.*, m.semester, m.sgpa, ROUND(AVG(m.sgpa) OVER (PARTITION BY m.usn ORDER BY m.semester ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),2) AS cgpa FROM students s LEFT JOIN marks m ON m.usn = s.usn WHERE s.name LIKE '%Manoj%' ORDER BY m.semester ASC;
+
+Q: complete information about Manoj
+SQL: SELECT s.*, m.semester, m.sgpa, ROUND(AVG(m.sgpa) OVER (PARTITION BY m.usn ORDER BY m.semester ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),2) AS cgpa FROM students s LEFT JOIN marks m ON m.usn = s.usn WHERE s.name LIKE '%Manoj%' ORDER BY m.semester ASC;
+
+Q: full details of 4HG23CS032
+SQL: SELECT s.*, m.semester, m.sgpa, ROUND(AVG(m.sgpa) OVER (PARTITION BY m.usn ORDER BY m.semester ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),2) AS cgpa FROM students s LEFT JOIN marks m ON m.usn = s.usn WHERE s.usn = '4HG23CS032' ORDER BY m.semester ASC;
+
+Q: student profile of Manoj
+SQL: SELECT s.*, m.semester, m.sgpa, ROUND(AVG(m.sgpa) OVER (PARTITION BY m.usn ORDER BY m.semester ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),2) AS cgpa FROM students s LEFT JOIN marks m ON m.usn = s.usn WHERE s.name LIKE '%Manoj%' ORDER BY m.semester ASC;
+
+Q: show complete information about Manoj (Kannada: ಮನೋಜ್ ಅವರ ಸಂಪೂರ್ಣ ಮಾಹಿತಿ)
+SQL: SELECT s.*, m.semester, m.sgpa, ROUND(AVG(m.sgpa) OVER (PARTITION BY m.usn ORDER BY m.semester ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),2) AS cgpa FROM students s LEFT JOIN marks m ON m.usn = s.usn WHERE s.name LIKE '%Manoj%' ORDER BY m.semester ASC;
+
+Q: show academic details of Manoj (Kannada: Manoj ಅವರ academic details)
+SQL: SELECT s.usn, s.name, m.semester, m.sgpa, ROUND(AVG(m.sgpa) OVER (PARTITION BY m.usn ORDER BY m.semester ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),2) AS cgpa FROM students s JOIN marks m ON m.usn = s.usn WHERE s.name LIKE '%Manoj%' ORDER BY m.semester ASC;
+
+Q: show 3rd semester CSE students (Kannada: 3ನೇ semester CSE students)
+SQL: SELECT s.usn, s.name, m.semester, m.sgpa FROM students s JOIN marks m ON m.usn = s.usn WHERE m.semester = 3 AND s.usn LIKE '%CS%' ORDER BY s.usn ASC;
+
+Q: show students who graduated in 2024 (Kannada: 2024ರಲ್ಲಿ graduated ಆದ students)
+SQL: SELECT s.usn, s.name, s.student_type, s.admission_year, (s.admission_year + 4) AS graduation_year FROM students s WHERE (s.admission_year + 4) = 2024 ORDER BY s.usn ASC;
+
 Q: top 10 students of 3rd semester
 SQL: SELECT s.usn, s.name, m.semester, m.sgpa FROM students s JOIN marks m ON m.usn = s.usn WHERE m.semester = 3 ORDER BY m.sgpa DESC LIMIT 10;
 
@@ -297,7 +323,17 @@ def _fix_window_order(sql: str) -> str:
 
 def generate_sql_query(natural_query: str, user_role: str, retry_count: int = 0) -> dict:
     schema = _load_schema_context()
-    prompt = _SYSTEM_PROMPT.format(schema=schema, query=natural_query, role=user_role)
+
+    # Sprint 2: Preprocess Kannada/mixed queries
+    normalized_query, lang = normalize_query(natural_query)
+    lang_context = build_language_context(natural_query, normalized_query, lang)
+
+    # Use normalized query for SQL generation
+    effective_query = normalized_query if normalized_query != natural_query else natural_query
+
+    # Prepend language context to prompt if non-English
+    schema_with_context = lang_context + schema if lang_context else schema
+    prompt = _SYSTEM_PROMPT.format(schema=schema_with_context, query=effective_query, role=user_role)
     raw = llm_service.generate_query(prompt).strip()
 
     if raw.startswith("ERROR:"):
@@ -319,7 +355,13 @@ def generate_sql_query(natural_query: str, user_role: str, retry_count: int = 0)
     if op == 'select':
         sql = _fix_window_order(sql)
 
-    return {"success": True, "sql": sql, "raw": sql, "query_dict": {"operation": op, "sql": sql}}
+    return {
+        "success": True,
+        "sql": sql,
+        "raw": sql,
+        "query_dict": {"operation": op, "sql": sql},
+        "response_language": lang if 'lang' in dir() else 'english',
+    }
 
 
 generate_mongo_query = generate_sql_query

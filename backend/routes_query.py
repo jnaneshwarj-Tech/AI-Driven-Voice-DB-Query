@@ -16,6 +16,12 @@ from query_security_validator import validate_sql_query
 from fuzzy_search import smart_fallback, get_student_data, get_student_profile, extract_search_term, fuzzy_search_students
 from error_messages import safe_http_error
 from canonical_fields import map_column, normalize_header, parse_wide_sem_col
+from kannada_processor import (
+    normalize_query as kn_normalize_query,
+    is_complete_profile_intent,
+    detect_language as kn_detect_language,
+    get_response_labels,
+)
 
 router = APIRouter(prefix="/api/query", tags=["Query Engine"])
 
@@ -580,8 +586,40 @@ _PERSONAL_FIELDS = {
 _ACADEMIC_FIELDS = {"usn", "name", "semester", "sgpa", "cgpa", "year"}
 
 
+_COMPLETE_PROFILE_RE = re.compile(
+    r'\b('
+    r'everything\s+about'
+    r'|complete\s+information'
+    r'|full\s+information'
+    r'|complete\s+details'
+    r'|full\s+details'
+    r'|entire\s+profile'
+    r'|all\s+information'
+    r'|all\s+about'
+    r'|all\s+details'
+    r'|tell\s+me\s+everything'
+    r'|show\s+everything'
+    r'|give\s+me\s+everything'
+    r'|full\s+profile'
+    r'|complete\s+profile'
+    r'|student\s+profile'
+    r'|both\s+academic'
+    r'|both\s+personal'
+    r'|both\s+details'
+    r'|academic\s+and\s+personal'
+    r'|personal\s+and\s+academic'
+    r'|both\s+academic\s+and\s+personal'
+    r'|both\s+personal\s+and\s+academic'
+    r')\b',
+    re.IGNORECASE
+)
+
+
 def _detect_intent(nq: str) -> str:
-    """Returns 'personal', 'academic', or 'full'."""
+    """Returns 'personal', 'academic', 'complete_profile', or 'full'."""
+    # Check complete profile first (Kannada + English)
+    if is_complete_profile_intent(nq) or _COMPLETE_PROFILE_RE.search(nq):
+        return 'complete_profile'
     has_personal = bool(_PERSONAL_KEYWORDS.search(nq))
     has_academic = bool(_ACADEMIC_KEYWORDS.search(nq))
     if has_personal and not has_academic:
@@ -593,7 +631,8 @@ def _detect_intent(nq: str) -> str:
 
 def _filter_by_intent(rows: list[dict], intent: str) -> list[dict]:
     """Keep only columns relevant to the intent."""
-    if intent == 'full' or not rows:
+    # complete_profile and full → return all columns
+    if intent in ('full', 'complete_profile') or not rows:
         return rows
     allowed = _PERSONAL_FIELDS if intent == 'personal' else _ACADEMIC_FIELDS
     return [{k: v for k, v in r.items() if k in allowed} for r in rows]
@@ -602,9 +641,17 @@ def _filter_by_intent(rows: list[dict], intent: str) -> list[dict]:
 # ── Multi-student ambiguity detection ─────────────────────────────────────────
 
 def _build_full_profile_row(usn: str) -> list[dict]:
-    """Merge personal profile + academic rows into enriched list."""
+    """Merge personal profile + academic rows + graduation data into enriched list."""
+    from graduation_manager import parse_usn_full
     profile = get_student_profile(usn) or {}
     academic = get_student_data(usn) or []
+    # Enrich profile with graduation data
+    usn_data = parse_usn_full(usn)
+    if usn_data:
+        for key in ('student_type', 'admission_batch', 'current_year', 'current_sem',
+                    'graduation_year', 'graduation_status'):
+            if key not in profile or profile.get(key) is None:
+                profile[key] = usn_data.get(key)
     if academic:
         return [{**profile, **row} for row in academic]
     # Personal-only student (no marks yet)
@@ -673,8 +720,9 @@ def _check_ambiguity(data: list[dict], nq: str) -> dict | None:
 
 def _enrich_with_profile(data: list[dict], nq: str, intent: str) -> list[dict]:
     """
-    When user searches a single student by name (full/personal intent),
+    When user searches a single student by name (full/personal/complete_profile intent),
     enrich data rows with all personal fields from the students table.
+    For complete_profile also add graduation data.
     """
     if intent == 'academic':
         return data
@@ -688,7 +736,17 @@ def _enrich_with_profile(data: list[dict], nq: str, intent: str) -> list[dict]:
     if not profile:
         return data
 
-    # For full/personal intent with single student: merge profile into every row
+    # For complete_profile: also add graduation data
+    if intent == 'complete_profile':
+        from graduation_manager import parse_usn_full
+        usn_data = parse_usn_full(usn)
+        if usn_data:
+            for key in ('student_type', 'admission_batch', 'current_year', 'current_sem',
+                        'graduation_year', 'graduation_status'):
+                if key not in profile or profile.get(key) is None:
+                    profile[key] = usn_data.get(key)
+
+    # For full/personal/complete_profile intent with single student: merge profile into every row
     return [{**profile, **row} for row in data]
 
 
@@ -728,7 +786,18 @@ def suggest_students(q: str, current_user: dict = Depends(get_current_user)):
 def generate_query(request: QueryRequest, current_user: dict = Depends(get_current_user)):
     start = time.time()
     nq = request.natural_query.strip()
-    intent = _detect_intent(nq)
+
+    # Sprint 2: Detect language BEFORE intent check (for response labeling)
+    response_language = kn_detect_language(nq)
+
+    # Sprint 2: Normalize Kannada/mixed queries for intent detection
+    normalized_nq, _ = kn_normalize_query(nq)
+
+    # Use normalized query for intent detection (keeps existing engine intact)
+    intent = _detect_intent(normalized_nq)
+    # Also check original query for Kannada complete-profile phrases
+    if intent != 'complete_profile' and is_complete_profile_intent(nq):
+        intent = 'complete_profile'
 
     partial_update = _build_update_request(nq) if re.match(r'^\s*update\b', nq, re.I) else None
     if partial_update and partial_update.get("action_required") == "select_student":
@@ -849,6 +918,16 @@ def generate_query(request: QueryRequest, current_user: dict = Depends(get_curre
         # ── Intent-based column filtering ─────────────────────────────────────
         data = _filter_by_intent(data, intent)
 
+        # ── Complete-profile fallback: if SQL returned nothing, try profile builder ──
+        if intent == 'complete_profile' and not data:
+            from fuzzy_search import extract_search_term
+            from kannada_processor import extract_search_term_multilingual
+            term = extract_search_term_multilingual(nq) or extract_search_term(nq)
+            if term:
+                candidates = fuzzy_search_students(term, limit=3, min_score=0.75)
+                if len(candidates) == 1:
+                    data = _build_full_profile_row(candidates[0]['usn'])
+
         _set_cache(nq, query_dict["sql"], data)
         return {
             "action_required": "none",
@@ -857,6 +936,7 @@ def generate_query(request: QueryRequest, current_user: dict = Depends(get_curre
             "execution_time": round(elapsed, 4),
             "cached": False,
             "intent": intent,
+            "response_language": response_language,
         }
 
     except Exception as e:
@@ -1256,4 +1336,96 @@ def get_analytics(current_user: dict = Depends(get_current_user)):
         "top_students": top_students,
         "query_by_role": query_by_role,
         "graduation_analytics": grad_analytics,
+    }
+
+
+@router.get("/profile/{usn}")
+def get_student_profile_api(usn: str, current_user: dict = Depends(get_current_user)):
+    """
+    Return a complete unified student profile for a given USN.
+
+    Response structure:
+      {
+        "personal": { all fields from students table },
+        "academic": [ { semester, sgpa, cgpa } ... ],
+        "graduation": { graduation_year, graduation_status, student_type, ... },
+        "has_personal": bool,
+        "has_academic": bool,
+      }
+    """
+    from graduation_manager import parse_usn_full
+    normalized_usn = _normalize_usn(usn)
+
+    with db_conn() as conn:
+        cur = conn.cursor(dictionary=True)
+
+        # Personal data — all columns
+        cur.execute("SELECT * FROM students WHERE UPPER(REPLACE(REPLACE(REPLACE(usn,' ',''),'-',''),'.',''))=%s",
+                    (normalized_usn,))
+        personal_row = cur.fetchone()
+
+        if not personal_row:
+            raise HTTPException(404, "Student not found.")
+
+        actual_usn = personal_row.get('usn', usn)
+
+        # Academic data — all semesters with cumulative CGPA
+        cur.execute(
+            "SELECT semester, sgpa, "
+            "ROUND(AVG(sgpa) OVER (PARTITION BY usn ORDER BY semester "
+            "ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW), 2) AS cgpa "
+            "FROM marks WHERE usn=%s ORDER BY semester ASC",
+            (actual_usn,)
+        )
+        academic_rows = cur.fetchall()
+        cur.close()
+
+    # Serialize dates / decimals
+    personal = _serialize_row(personal_row)
+
+    # Graduation data
+    graduation = {}
+    usn_data = parse_usn_full(actual_usn)
+    if usn_data:
+        graduation = {
+            'student_type': usn_data.get('student_type'),
+            'admission_batch': usn_data.get('admission_batch'),
+            'graduation_year': usn_data.get('graduation_year'),
+            'graduation_status': usn_data.get('graduation_status'),
+            'current_year': usn_data.get('current_year'),
+            'current_sem': usn_data.get('current_sem'),
+        }
+
+    academic = [_serialize_row(r) for r in academic_rows]
+
+    return {
+        "personal": personal,
+        "academic": academic,
+        "graduation": graduation,
+        "has_personal": bool(personal),
+        "has_academic": bool(academic),
+    }
+
+
+@router.get("/profile/search")
+def search_student_profiles(name: str, current_user: dict = Depends(get_current_user)):
+    """
+    Fuzzy name search returning up to 5 student profile cards.
+    Used when user types a name for the complete-profile intent.
+    """
+    if not name or len(name.strip()) < 2:
+        raise HTTPException(400, "Please provide at least 2 characters.")
+
+    # Handle Kannada input: extract search term
+    from kannada_processor import extract_search_term_multilingual
+    effective_name = extract_search_term_multilingual(name) or name.strip()
+
+    candidates = fuzzy_search_students(effective_name, limit=5, min_score=0.55)
+    if not candidates:
+        raise HTTPException(404, "No matching students found.")
+
+    return {
+        "candidates": candidates,
+        "search_term": effective_name,
+        "original_query": name,
     }
