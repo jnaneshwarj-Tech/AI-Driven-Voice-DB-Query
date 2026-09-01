@@ -170,7 +170,7 @@ def forgot_password(req: ForgotPasswordRequest, request: Request = None):
                 success=False,
                 ip_address=ip,
             )
-            return {"message": generic_msg}
+            raise HTTPException(status_code=400, detail="No account found with this email address. Please check your registered email.")
 
         # Generate cryptographically secure random token
         raw_token = secrets.token_urlsafe(32)
@@ -204,12 +204,11 @@ def forgot_password(req: ForgotPasswordRequest, request: Request = None):
         ip_address=ip,
     )
 
-    response_data = {"message": generic_msg}
-    if not settings.MAIL_USERNAME:
-        response_data["reset_url"] = reset_link
-        response_data["token"] = raw_token
-
-    return response_data
+    return {
+        "message": "Account verified! Click the button below to reset your password.",
+        "reset_url": reset_link,
+        "token": raw_token,
+    }
 
 @router.post("/reset-password")
 def reset_password(req: ResetPasswordRequest, request: Request = None):

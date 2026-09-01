@@ -71,7 +71,7 @@ export default function ForgotPassword() {
             )}
 
             {message && (
-              <div className="rounded-lg bg-emerald-500/10 p-4 border border-emerald-500/20 space-y-3 text-emerald-400">
+              <div className="rounded-lg bg-emerald-500/10 p-4 border border-emerald-500/20 space-y-4 text-emerald-400">
                 <div className="flex items-start gap-3">
                   <CheckCircle2 className="w-5 h-5 flex-shrink-0 mt-0.5" />
                   <div className="text-sm font-medium">
@@ -80,12 +80,11 @@ export default function ForgotPassword() {
                 </div>
                 {devToken && (
                   <div className="pt-2 border-t border-emerald-500/20">
-                    <p className="text-xs text-slate-300 mb-3">Quick Reset Access (Local Dev Mode):</p>
                     <Link
                       to={`/reset-password/${devToken}`}
-                      className="w-full flex items-center justify-center gap-2 py-2 px-4 rounded-xl font-semibold text-sm bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg transition-all"
+                      className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-bold text-sm bg-emerald-600 hover:bg-emerald-500 text-white shadow-xl hover:shadow-emerald-500/30 transition-all transform hover:-translate-y-0.5 active:translate-y-0"
                     >
-                      🔑 Proceed to Reset Password Now
+                      👉 🔑 Proceed to Reset Password Now
                     </Link>
                   </div>
                 )}
