@@ -1,7 +1,12 @@
+import secrets
+import hashlib
+from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr
 from auth import verify_password, create_access_token, get_password_hash, get_current_user
 from database import db_conn, write_audit_log
+from email_service import send_reset_password_email
+from config import settings
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
@@ -14,6 +19,14 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: str
     role: str = "Staff"
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+    confirm_password: str
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -135,3 +148,126 @@ def logout(current_user: dict = Depends(get_current_user)):
         summary=f"User {current_user['username']} logged out",
     )
     return {"success": True, "message": "Logged out successfully."}
+
+@router.post("/forgot-password")
+def forgot_password(req: ForgotPasswordRequest, request: Request = None):
+    ip = request.client.host if request and request.client else ""
+    generic_msg = "If an account exists for this email, a password reset link has been sent."
+
+    with db_conn() as conn:
+        cur = conn.cursor(dictionary=True)
+        cur.execute("SELECT id, username, email FROM users WHERE email=%s", (req.email,))
+        user = cur.fetchone()
+
+        if not user:
+            cur.close()
+            write_audit_log(
+                action="FORGOT_PASSWORD_REQUEST",
+                username=req.email,
+                role="",
+                target_table="users",
+                summary=f"Password reset requested for unknown email: {req.email}",
+                success=False,
+                ip_address=ip,
+            )
+            return {"message": generic_msg}
+
+        # Generate cryptographically secure random token
+        raw_token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+        expires_at = datetime.now() + timedelta(minutes=20)
+
+        # Invalidate previous unused tokens for this user
+        cur.execute(
+            "UPDATE password_reset_tokens SET used=1 WHERE user_id=%s AND used=0",
+            (user["id"],)
+        )
+
+        # Store new token
+        cur.execute(
+            "INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES (%s, %s, %s)",
+            (user["id"], token_hash, expires_at)
+        )
+        conn.commit()
+        cur.close()
+
+    reset_link = f"{settings.FRONTEND_URL}/reset-password/{raw_token}"
+    send_reset_password_email(req.email, reset_link)
+
+    write_audit_log(
+        action="FORGOT_PASSWORD_LINK_SENT",
+        username=user["username"],
+        role="",
+        target_table="users",
+        summary=f"Password reset token generated for user {user['username']}",
+        success=True,
+        ip_address=ip,
+    )
+
+    response_data = {"message": generic_msg}
+    if not settings.MAIL_USERNAME:
+        response_data["reset_url"] = reset_link
+        response_data["token"] = raw_token
+
+    return response_data
+
+@router.post("/reset-password")
+def reset_password(req: ResetPasswordRequest, request: Request = None):
+    ip = request.client.host if request and request.client else ""
+
+    if not req.new_password:
+        raise HTTPException(status_code=400, detail="New password cannot be empty.")
+
+    if req.new_password != req.confirm_password:
+        raise HTTPException(status_code=400, detail="Passwords do not match.")
+
+    if len(req.new_password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters long.")
+
+    token_hash = hashlib.sha256(req.token.encode()).hexdigest()
+
+    with db_conn() as conn:
+        cur = conn.cursor(dictionary=True)
+        cur.execute(
+            "SELECT * FROM password_reset_tokens WHERE token_hash=%s AND used=0 AND expires_at > NOW()",
+            (token_hash,)
+        )
+        token_record = cur.fetchone()
+
+        if not token_record:
+            cur.close()
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid, expired, or already-used reset token."
+            )
+
+        user_id = token_record["user_id"]
+        cur.execute("SELECT id, username, email, role FROM users WHERE id=%s", (user_id,))
+        user = cur.fetchone()
+
+        if not user:
+            cur.close()
+            raise HTTPException(status_code=400, detail="Associated user account not found.")
+
+        # Update user's password
+        new_hash = get_password_hash(req.new_password)
+        cur.execute("UPDATE users SET password_hash=%s WHERE id=%s", (new_hash, user_id))
+
+        # Invalidate the token
+        cur.execute("UPDATE password_reset_tokens SET used=1 WHERE id=%s", (token_record["id"],))
+
+        conn.commit()
+        cur.close()
+
+    write_audit_log(
+        action="PASSWORD_RESET_SUCCESS",
+        username=user["username"],
+        role=user.get("role", ""),
+        target_table="users",
+        summary=f"Password successfully reset for user {user['username']}",
+        success=True,
+        ip_address=ip,
+    )
+
+    return {"message": "Password reset successfully. You can now log in with your new password."}
+

@@ -2,11 +2,13 @@ import os
 import io
 import json
 import threading
-from datetime import datetime
+import secrets
+import hashlib
+from datetime import datetime, timedelta
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 import pandas as pd
 
 from db import init_database, get_connection
@@ -16,9 +18,16 @@ from validation import get_validation_report, get_duplicate_usns
 from cache import clear_cache
 from models import MAIN_TABLE
 from auth import (
-    init_users_table, register_user, login_user,
+    init_users_table, register_user, login_user, hash_password,
     get_current_user, require_staff, require_any
 )
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), "..", "..", "backend"))
+try:
+    from email_service import send_reset_password_email
+except ImportError:
+    def send_reset_password_email(to_email, reset_link):
+        print(f"[RESET EMAIL LINK] {reset_link}")
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "uploads")
 REPORTS_DIR = os.path.join(os.path.dirname(__file__), "..", "reports")
@@ -49,6 +58,14 @@ class LoginRequest(BaseModel):
     email: str
     password: str
 
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+    confirm_password: str
+
 @app.post("/auth/register")
 async def register(req: RegisterRequest):
     if len(req.password) < 6:
@@ -58,6 +75,71 @@ async def register(req: RegisterRequest):
 @app.post("/auth/login")
 async def login(req: LoginRequest):
     return login_user(req.email, req.password)
+
+@app.post("/auth/forgot-password")
+async def forgot_password(req: ForgotPasswordRequest):
+    generic_msg = "If an account exists for this email, a password reset link has been sent."
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT id, name, email FROM users WHERE email = %s", (req.email,))
+    user = cursor.fetchone()
+
+    if not user:
+        cursor.close()
+        conn.close()
+        return {"message": generic_msg}
+
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    expires_at = datetime.now() + timedelta(minutes=20)
+
+    cursor.execute("UPDATE password_reset_tokens SET used=1 WHERE user_id=%s AND used=0", (user["id"],))
+    cursor.execute(
+        "INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES (%s, %s, %s)",
+        (user["id"], token_hash, expires_at)
+    )
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+    reset_link = f"{frontend_url}/reset-password/{raw_token}"
+    send_reset_password_email(req.email, reset_link)
+
+    return {"message": generic_msg}
+
+@app.post("/auth/reset-password")
+async def reset_password(req: ResetPasswordRequest):
+    if not req.new_password:
+        raise HTTPException(400, "New password cannot be empty.")
+    if req.new_password != req.confirm_password:
+        raise HTTPException(400, "Passwords do not match.")
+    if len(req.new_password) < 6:
+        raise HTTPException(400, "Password must be at least 6 characters.")
+
+    token_hash = hashlib.sha256(req.token.encode()).hexdigest()
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute(
+        "SELECT * FROM password_reset_tokens WHERE token_hash=%s AND used=0 AND expires_at > NOW()",
+        (token_hash,)
+    )
+    token_record = cursor.fetchone()
+
+    if not token_record:
+        cursor.close()
+        conn.close()
+        raise HTTPException(400, "Invalid, expired, or already-used reset token.")
+
+    user_id = token_record["user_id"]
+    new_hashed = hash_password(req.new_password)
+    cursor.execute("UPDATE users SET password=%s WHERE id=%s", (new_hashed, user_id))
+    cursor.execute("UPDATE password_reset_tokens SET used=1 WHERE id=%s", (token_record["id"],))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    return {"message": "Password reset successfully. You can now log in with your new password."}
 
 @app.get("/auth/me")
 async def me(user: dict = Depends(get_current_user)):

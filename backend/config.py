@@ -16,6 +16,15 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 1000
 
+    # Email / SMTP Settings for Forgot Password
+    MAIL_SERVER: str = "smtp.gmail.com"
+    MAIL_PORT: int = 587
+    MAIL_USERNAME: str = ""
+    MAIL_PASSWORD: str = ""
+    MAIL_USE_TLS: bool = True
+    MAIL_FROM: str = ""
+    FRONTEND_URL: str = "http://localhost:5173"
+
     # Sprint 1 — Backup / Recovery settings
     BACKUP_DIR: str = "backups"
     BACKUP_RETENTION_DAILY: int = 7        # keep last N daily backups

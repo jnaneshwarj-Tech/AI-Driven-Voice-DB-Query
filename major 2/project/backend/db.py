@@ -3,10 +3,10 @@ from mysql.connector import pooling
 import os
 
 DB_CONFIG = {
-    "host": "localhost",
-    "user": "root",
-    "password": "Manoj@123",
-    "database": "student_db",
+    "host": os.getenv("MYSQL_HOST", "localhost"),
+    "user": os.getenv("MYSQL_USER", "root"),
+    "password": os.getenv("MYSQL_PASSWORD", "AIproject@258"),
+    "database": os.getenv("MYSQL_DB", "student_db"),
     "autocommit": False,
 }
 
@@ -86,6 +86,19 @@ def init_database():
             issue VARCHAR(255),
             raw_value TEXT,
             logged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS password_reset_tokens (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL,
+            token_hash VARCHAR(255) NOT NULL,
+            expires_at DATETIME NOT NULL,
+            used TINYINT(1) DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_token_hash (token_hash),
+            INDEX idx_user_id (user_id)
         )
     """)
 

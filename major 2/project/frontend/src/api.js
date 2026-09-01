@@ -29,6 +29,12 @@ export const registerUser = (name, email, password) =>
 export const loginUser = (email, password) =>
   api.post('/auth/login', { email, password });
 
+export const forgotPassword = (email) =>
+  api.post('/auth/forgot-password', { email });
+
+export const resetPassword = (token, new_password, confirm_password) =>
+  api.post('/auth/reset-password', { token, new_password, confirm_password });
+
 export const uploadFile = (file, onProgress) => {
   const form = new FormData();
   form.append('file', file);
