@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { loginUser, registerUser } from '../api';
+import { loginUser, registerUser, forgotPassword } from '../api';
 
 export default function Login({ onLogin }) {
   const [tab, setTab] = useState('login');
@@ -40,6 +40,20 @@ export default function Login({ onLogin }) {
       setForm(f => ({ ...f, name: '', password: '' }));
     } catch (e) {
       setError(e.response?.data?.detail || 'Registration failed.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleForgot = async (e) => {
+    e.preventDefault();
+    if (!form.email) { setError('Please enter your registered email.'); return; }
+    setLoading(true);
+    try {
+      const r = await forgotPassword(form.email);
+      setSuccess('✅ ' + (r.data?.message || 'If an account exists, a reset link has been sent.'));
+    } catch (e) {
+      setError(e.response?.data?.detail || 'Failed to request reset link.');
     } finally {
       setLoading(false);
     }
@@ -92,8 +106,14 @@ export default function Login({ onLogin }) {
                 placeholder="your@email.com" value={form.email}
                 onChange={e => set('email', e.target.value)} autoFocus />
             </div>
-            <div style={{ marginBottom: 20 }}>
-              <label style={labelStyle}>Password</label>
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <label style={labelStyle}>Password</label>
+                <button type="button" onClick={() => { setTab('forgot'); setError(''); setSuccess(''); }}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#1a73e8', fontSize: '0.78rem', fontWeight: 600 }}>
+                  Forgot Password?
+                </button>
+              </div>
               <div style={{ position: 'relative' }}>
                 <input className="search-input" style={{ width: '100%', paddingRight: 40 }}
                   type={show ? 'text' : 'password'} placeholder="••••••••"
@@ -110,6 +130,24 @@ export default function Login({ onLogin }) {
               <p style={{ fontSize: '0.78rem', color: '#666', margin: 0, textAlign: 'center' }}>
                 Register to get <strong>Staff</strong> access · Admin accounts are created manually
               </p>
+            </div>
+          </form>
+        ) : tab === 'forgot' ? (
+          <form onSubmit={handleForgot}>
+            <div style={{ marginBottom: 14 }}>
+              <label style={labelStyle}>Registered Email</label>
+              <input className="search-input" style={{ width: '100%' }} type="email"
+                placeholder="your@email.com" value={form.email}
+                onChange={e => set('email', e.target.value)} autoFocus />
+            </div>
+            <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: 12 }} disabled={loading}>
+              {loading ? <span className="spinner" /> : '📧 Send Reset Link'}
+            </button>
+            <div style={{ marginTop: 16, textCenter: 'center' }}>
+              <button type="button" onClick={() => { setTab('login'); setError(''); setSuccess(''); }}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#666', fontSize: '0.85rem' }}>
+                ← Back to Login
+              </button>
             </div>
           </form>
         ) : (

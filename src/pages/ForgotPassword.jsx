@@ -1,40 +1,41 @@
 import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import api from '../services/api';
-import { Database, Lock, User, AlertCircle } from 'lucide-react';
+import { Database, Mail, AlertCircle, CheckCircle2, ArrowLeft } from 'lucide-react';
 
-export default function Login() {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
+export default function ForgotPassword() {
+  const [email, setEmail] = useState('');
+  const [message, setMessage] = useState('');
+  const [devToken, setDevToken] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const navigate = useNavigate();
 
-  const handleLogin = async (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    setMessage('');
+    setDevToken('');
+
+    if (!email.trim()) {
+      setError('Please enter your registered email address.');
+      return;
+    }
+
     setLoading(true);
 
     try {
-      const response = await api.post('/auth/login', {
-        username,
-        password,
-      });
-      
-      localStorage.setItem('token', response.data.access_token);
-      localStorage.setItem('role', response.data.user?.role || '');
-      localStorage.setItem('username', response.data.user?.username || '');
-      
-      navigate('/dashboard');
+      const response = await api.post('/auth/forgot-password', { email: email.trim() });
+      setMessage(response.data?.message || 'If an account exists for this email, a password reset link has been sent.');
+      if (response.data?.token) {
+        setDevToken(response.data.token);
+      }
     } catch (err) {
-      if (err.response?.status === 401) {
-        setError('Invalid username or password.');
+      if (err.response?.data?.detail) {
+        setError(err.response.data.detail);
       } else if (err.response?.status === 422) {
-        setError('Please enter both username and password.');
-      } else if (err.response) {
-        setError(err.response.data?.detail || 'Login failed. Please try again.');
+        setError('Please enter a valid email address.');
       } else {
-        setError('Failed to connect to the server. Is the backend running?');
+        setError('Failed to send reset link. Please check your connection and try again.');
       }
     } finally {
       setLoading(false);
@@ -52,16 +53,16 @@ export default function Login() {
           </div>
         </div>
         <h2 className="mt-6 text-center text-3xl font-extrabold text-white tracking-tight">
-          AI Database System
+          Reset Password
         </h2>
         <p className="mt-2 text-center text-sm text-slate-300">
-          Sign in to access your college workspace
+          Enter your email address to receive a secure password reset link
         </p>
       </div>
 
       <div className="relative mt-8 sm:mx-auto sm:w-full sm:max-w-md z-10">
         <div className="bg-slate-800/50 backdrop-blur-xl py-8 px-4 shadow-2xl sm:rounded-2xl sm:px-10 border border-slate-700">
-          <form className="space-y-6" onSubmit={handleLogin}>
+          <form className="space-y-6" onSubmit={handleSubmit}>
             {error && (
               <div className="rounded-lg bg-red-500/10 p-4 border border-red-500/20 flex items-center gap-3 text-red-400">
                 <AlertCircle className="w-5 h-5 flex-shrink-0" />
@@ -69,41 +70,40 @@ export default function Login() {
               </div>
             )}
 
-            <div>
-              <label className="block text-sm font-medium text-slate-300">Username</label>
-              <div className="mt-1 relative rounded-md shadow-sm">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <User className="h-5 w-5 text-slate-500" />
+            {message && (
+              <div className="rounded-lg bg-emerald-500/10 p-4 border border-emerald-500/20 space-y-4 text-emerald-400">
+                <div className="flex items-start gap-3">
+                  <CheckCircle2 className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                  <div className="text-sm font-medium">
+                    <p>{message}</p>
+                  </div>
                 </div>
-                <input
-                  type="text"
-                  required
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  className="block w-full pl-10 pr-3 py-2.5 border border-slate-600 rounded-xl leading-5 bg-slate-900/50 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all sm:text-sm"
-                  placeholder="Enter your registered username"
-                />
+                {devToken && (
+                  <div className="pt-2 border-t border-emerald-500/20">
+                    <Link
+                      to={`/reset-password/${devToken}`}
+                      className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-bold text-sm bg-emerald-600 hover:bg-emerald-500 text-white shadow-xl hover:shadow-emerald-500/30 transition-all transform hover:-translate-y-0.5 active:translate-y-0"
+                    >
+                      👉 🔑 Proceed to Reset Password Now
+                    </Link>
+                  </div>
+                )}
               </div>
-            </div>
+            )}
 
             <div>
-              <div className="flex items-center justify-between">
-                <label className="block text-sm font-medium text-slate-300">Password</label>
-                <Link to="/forgot-password" className="text-xs font-medium text-blue-400 hover:text-blue-300 transition-colors">
-                  Forgot Password?
-                </Link>
-              </div>
+              <label className="block text-sm font-medium text-slate-300">Registered Email Address</label>
               <div className="mt-1 relative rounded-md shadow-sm">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Lock className="h-5 w-5 text-slate-500" />
+                  <Mail className="h-5 w-5 text-slate-500" />
                 </div>
                 <input
-                  type="password"
+                  type="email"
                   required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
                   className="block w-full pl-10 pr-3 py-2.5 border border-slate-600 rounded-xl leading-5 bg-slate-900/50 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all sm:text-sm"
-                  placeholder="••••••••"
+                  placeholder="your.email@college.edu"
                 />
               </div>
             </div>
@@ -119,13 +119,13 @@ export default function Login() {
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                   </svg>
-                ) : 'Sign in'}
+                ) : 'Send Reset Link'}
               </button>
             </div>
             
             <div className="mt-4 text-center">
-              <Link to="/register" className="text-sm font-medium text-blue-400 hover:text-blue-300">
-                Register
+              <Link to="/login" className="inline-flex items-center gap-2 text-sm font-medium text-slate-400 hover:text-slate-200 transition-colors">
+                <ArrowLeft className="w-4 h-4" /> Back to Login
               </Link>
             </div>
           </form>

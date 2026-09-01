@@ -13,6 +13,21 @@ db_init_error = None
 def init_pool():
     global db_pool, db_init_error
     try:
+        # Bootstrap: ensure database exists first
+        try:
+            bootstrap_conn = mysql.connector.connect(
+                host=settings.MYSQL_HOST,
+                port=settings.MYSQL_PORT,
+                user=settings.MYSQL_USER,
+                password=settings.MYSQL_PASSWORD,
+            )
+            b_cur = bootstrap_conn.cursor()
+            b_cur.execute(f"CREATE DATABASE IF NOT EXISTS `{settings.MYSQL_DB}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
+            b_cur.close()
+            bootstrap_conn.close()
+        except Exception as b_err:
+            print(f"[WARN] Database bootstrap check: {b_err}")
+
         db_pool = pooling.MySQLConnectionPool(
             pool_name="mypool",
             pool_size=20,               # increased from 10
@@ -84,6 +99,19 @@ def create_indexes():
                     password_hash VARCHAR(255) NOT NULL,
                     role ENUM('Admin','Staff') DEFAULT 'Staff',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id INT NOT NULL,
+                    token_hash VARCHAR(255) NOT NULL,
+                    expires_at DATETIME NOT NULL,
+                    used TINYINT(1) DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_token_hash (token_hash),
+                    INDEX idx_user_id (user_id)
                 )
             """)
 
