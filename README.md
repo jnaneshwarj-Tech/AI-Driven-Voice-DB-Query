@@ -1,4 +1,4 @@
-# AI-Driven Voice & Text Based Database Query Automation System
+# AI-Driven Voice & Text Based Database Query Automation System For College
 
 A production-ready full-stack application that translates natural language (voice or text) into optimized, secure MySQL queries using the Nvidia LLM API and RAG (Retrieval-Augmented Generation) for database schema understanding.
 
