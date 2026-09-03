@@ -134,6 +134,43 @@ All implementation notes, fixes, setup instructions, test cases, and progress up
 7. Transliteration requests are locked and debounced to prevent overlapping responses and cursor jumps.
 8. Protected entities are excluded from translation before the backend sends the query to the AI service.
 
+### Translation Services
+The system uses two complementary translators:
+
+- **Frontend phonetic transliteration:** `frontend/src/utils/googleTransliterate.js` calls the Google Input Tools endpoint with the Kannada input code `kn-t-i0-und`. It returns Kannada suggestions for Roman/English phonetic typing while preserving already-Kannada text and technical terms.
+- **Frontend local fallback:** `frontend/src/utils/kannadaTransliteration.js` contains Kannada character mappings, common-word mappings, protected English terms, and fallback conversion when a remote suggestion is unavailable.
+- **Backend semantic translation:** `backend/translation_service.py` converts Kannada Unicode queries into English meaning before the existing SQL pipeline. It calls Google's translation endpoint with Kannada as the source and English as the target.
+- **Backend fallback:** If the translation service fails, `kannada_processor.normalize_query()` performs keyword normalization so the query can still reach intent detection.
+- **Entity protection:** USNs, numbers, marks, years, semesters, names, and technical terms such as `CGPA`, `SGPA`, `CSE`, and `EMAIL` are replaced with placeholders before translation and restored afterward.
+- **Language modes:** Query requests support `english`, `kannada`, and `mixed`; response language can independently be selected as English or Kannada.
+
+Translation is therefore not a single word replacement. Typing conversion happens in the browser for a natural input experience, while semantic translation happens in the backend so the AI query pipeline receives understandable intent without corrupting database values.
+
+### File Attachments and Data Import
+Staff users can attach files from the dashboard through `POST /api/files/upload`. Supported formats are:
+
+- CSV, XLSX, and XLS for student and academic data
+- JSON and TXT for structured or text-based imports
+- PDF, PNG, JPG, and JPEG for supported document/image workflows
+
+The upload process works in two stages:
+
+1. The backend validates the file type and non-empty content, stores the original content in the upload cache, records metadata in `uploaded_files`, and marks it `pending`.
+2. The user chooses **Update Database**. The parser maps varied headers to canonical fields, validates values, classifies every row, and imports the result in one transaction.
+
+Every parsed row receives a visible outcome: `NEW`, `UPDATED`, `UNCHANGED`, `DUPLICATE`, `INVALID`, or `REJECTED`. Large files are processed in chunks, database changes are audited, cache entries are cleared when necessary, and transaction rollback prevents partial imports.
+
+### Personal, Academic, and Complete Profiles
+Natural-language intent detection keeps student information focused:
+
+- **Personal queries** return identity and profile fields such as name, USN, date of birth, parents, blood group, address, phone, email, Aadhaar, gender, category, and status.
+- **Academic queries** return semester, SGPA, CGPA, marks, grades, year, and performance information.
+- **Complete profile queries** recognize phrases such as “full information”, “entire profile”, “everything about”, or “academic and personal”, then merge personal data, academic rows, and graduation information.
+- **Full or mixed queries** return the complete available result when the request does not belong to one exclusive category.
+- **Ambiguous names** can produce a selection suggestion when multiple USNs match a similar search term.
+
+The frontend presents the result in separate personal and academic views, while the backend keeps the query and response pipeline unified.
+
 ### Kannada Fix History
 - Fixed the original first-word-only behavior by changing word-by-word API calls to complete-phrase requests.
 - Added space-key conversion so the previous word is translated immediately after a space.
@@ -159,6 +196,20 @@ All implementation notes, fixes, setup instructions, test cases, and progress up
 - New passwords are validated, hashed, and stored without exposing credentials in logs or responses.
 - SMTP configuration supports Gmail and other providers; development mode supports local testing.
 - The database migration adds the OTP, reset-token, attempt-count, expiry, and cooldown fields required by the flow.
+
+### OTP and Email Generation
+The password-reset process is implemented by `backend/routes_auth.py` and `backend/email_service.py`:
+
+1. The user submits a username and registered email to `POST /api/auth/forgot-password`.
+2. The backend verifies both values, applies hourly request limits and resend cooldowns, and creates a cryptographically secure six-digit OTP using Python's `secrets` module.
+3. Only a SHA-256 hash of the OTP is stored in MySQL. The plaintext OTP is never stored in the database or included in the API response.
+4. `email_service.py` generates a multipart email containing both a plain-text version and a branded HTML version with the application name, OTP, expiry notice, and safety instructions.
+5. SMTP sends the message using TLS and the configured `MAIL_FROM_NAME`, `MAIL_FROM`, server, port, username, and password.
+6. In development mode, when SMTP credentials are absent, the OTP is printed to the backend console instead of being sent externally.
+7. `POST /api/auth/verify-reset-otp` validates expiry, attempt count, and the stored hash, then returns a short-lived reset token.
+8. `POST /api/auth/reset-password` validates the token, updates the hashed password in a transaction, and makes the token single-use.
+
+The default security controls are a 120-second OTP expiry, 5 failed-attempt limit, 30-second resend cooldown, 5 requests per email per hour, and 10-minute reset-token expiry. Generic responses prevent account enumeration.
 
 ### Query and Upload Implementation
 - The frontend sends text or voice intent to the backend through one query workflow.
