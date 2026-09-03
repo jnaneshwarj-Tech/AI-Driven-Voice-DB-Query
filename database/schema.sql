@@ -15,6 +15,25 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS password_reset_requests (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    otp_hash CHAR(64) NOT NULL,
+    otp_created_at DATETIME NOT NULL,
+    otp_expires_at DATETIME NOT NULL,
+    otp_used_at DATETIME DEFAULT NULL,
+    attempt_count INT NOT NULL DEFAULT 0,
+    reset_token_hash CHAR(64) DEFAULT NULL,
+    reset_token_expires_at DATETIME DEFAULT NULL,
+    reset_token_used_at DATETIME DEFAULT NULL,
+    created_ip VARCHAR(60) DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_user_id (user_id),
+    INDEX idx_otp_hash (otp_hash),
+    INDEX idx_reset_token_hash (reset_token_hash),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
 -- Students (core entity)
 CREATE TABLE IF NOT EXISTS students (
     usn VARCHAR(20) PRIMARY KEY,

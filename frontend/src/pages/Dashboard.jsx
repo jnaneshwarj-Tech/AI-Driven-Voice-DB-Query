@@ -17,13 +17,14 @@ import BackupRestore from '../components/BackupRestore';
 import CombinedStudentView from '../components/CombinedStudentView';
 import LanguageSelector from '../components/LanguageSelector';
 import { useTheme } from '../context/ThemeContext';
-import { getPlaceholderText, getExampleQueries, hasKannadaScript } from '../utils/kannadaTransliteration';
+import { getPlaceholderText, getExampleQueries } from '../utils/kannadaTransliteration';
+import { DeshKannadaProcessor } from '../utils/simpleKannadaInput';
 import {
   LogOut, History, Database, Mic, Send, AlertTriangle,
   Download, FileText, Table as TableIcon,
   CheckCircle, BarChart2, ShieldAlert, Printer, Search, User, GraduationCap,
   PlusCircle, Trash2, Clock, ChevronRight, RotateCcw, Activity,
-  Zap, RefreshCw, Moon, Sun, Bell, HardDrive
+  Zap, RefreshCw, Moon, Sun, Bell, HardDrive, Languages
 } from 'lucide-react';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -117,12 +118,19 @@ const MATCH_BADGE = {
 };
 
 // ── Generic Table ─────────────────────────────────────────────────────────────
-function GenericTable({ data }) {
+function GenericTable({ data, responseLanguage = 'english' }) {
   const [search, setSearch] = useState('');
   const [sortCol, setSortCol] = useState(null);
   const [sortDir, setSortDir] = useState('asc');
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 20;
+  const kannadaHeaders = {
+    usn: 'ವಿದ್ಯಾರ್ಥಿ ಸಂಖ್ಯೆ', name: 'ಹೆಸರು', current_sem: 'ಪ್ರಸ್ತುತ ಸೆಮಿಸ್ಟರ್',
+    status: 'ಸ್ಥಿತಿ', father_name: 'ತಂದೆಯ ಹೆಸರು', mother_name: 'ತಾಯಿಯ ಹೆಸರು',
+    blood_group: 'ರಕ್ತದ ಗುಂಪು', gender: 'ಲಿಂಗ', religion: 'ಧರ್ಮ', category: 'ವರ್ಗ',
+    phone: 'ದೂರವಾಣಿ', email: 'ಇಮೇಲ್', address: 'ವಿಳಾಸ', branch: 'ಶಾಖೆ',
+    semester: 'ಸೆಮಿಸ್ಟರ್', sgpa: 'SGPA', cgpa: 'CGPA', year: 'ವರ್ಷ',
+  };
 
   if (!data?.length) return null;
   const flatRows = data.map(r => flattenDoc(r));
@@ -166,7 +174,7 @@ function GenericTable({ data }) {
               {headers.map(h => (
                 <th key={h} onClick={() => toggleSort(h)}
                   className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer hover:bg-slate-100 whitespace-nowrap select-none">
-                  {h.replace(/_/g, ' ')} {sortCol === h ? (sortDir === 'asc' ? '↑' : '↓') : ''}
+                  {(responseLanguage === 'kannada' ? kannadaHeaders[h] : null) || h.replace(/_/g, ' ')} {sortCol === h ? (sortDir === 'asc' ? '↑' : '↓') : ''}
                 </th>
               ))}
             </tr>
@@ -353,6 +361,7 @@ export default function Dashboard() {
   const [activeSuggestion, setActiveSuggestion] = useState(-1);
   const [liveSearchTerm, setLiveSearchTerm] = useState('');
   const [opResult, setOpResult]     = useState(null);  // OperationResultModal data
+  const [kannadaSuggestions, setKannadaSuggestions] = useState([]);  // Desh Kannada-style suggestions
   
   // ── Language State ────────────────────────────────────────────────────────
   const [selectedLanguage, setSelectedLanguage] = useState(() => {
@@ -368,6 +377,8 @@ export default function Dashboard() {
   const dropdownRef = useRef(null);
   const selectionLocked = useRef(false);
   const confirmedEntity = useRef(null);
+  const kannadaProcessor = useRef(null);
+  const textareaRef = useRef(null);
 
   useEffect(() => {
     if (!localStorage.getItem('token')) {
@@ -486,12 +497,111 @@ export default function Dashboard() {
     const voiceLangMap = {
       'english': 'en-US',
       'kannada': 'kn-IN',
-      'mixed': 'en-US', // Default to English for mixed, user can override
+      'mixed': 'kn-IN',
     };
     const newVoiceLang = voiceLangMap[lang] || 'en-US';
     setVoiceLanguage(newVoiceLang);
     localStorage.setItem('voiceLanguage', newVoiceLang);
+    
+    // Initialize Desh Kannada-style processor when Kannada mode selected
+    if (lang === 'kannada' && !kannadaProcessor.current) {
+      kannadaProcessor.current = new DeshKannadaProcessor(
+        textareaRef,
+        setQuery,
+        setKannadaSuggestions
+      );
+    } else if (lang !== 'kannada') {
+      if (kannadaProcessor.current) {
+        kannadaProcessor.current.cleanup();
+        kannadaProcessor.current = null;
+      }
+      setKannadaSuggestions([]);
+    }
   };
+
+  const handleQueryChange = (e) => {
+    const value = typeof e === 'string' ? e : e.target.value;
+    const cursorPos = typeof e === 'string' ? value.length : e.target.selectionStart;
+    
+    // Update query immediately
+    setQuery(value);
+    
+    // If Kannada mode, process for suggestions
+    if (selectedLanguage === 'kannada' && kannadaProcessor.current && textareaRef.current) {
+      kannadaProcessor.current.handleInput(value, cursorPos);
+    }
+    
+    // Clear errors
+    if (error) setError('');
+    if (noMatchMsg) setNoMatchMsg('');
+  };
+  
+  const handleKeyDown = (e) => {
+    // Handle space in Kannada mode
+    if (e.key === ' ' && selectedLanguage === 'kannada' && kannadaProcessor.current) {
+      e.preventDefault();
+      const result = kannadaProcessor.current.handleSpace(query, e.target.selectionStart);
+      setQuery(result.text);
+      // Set cursor position
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.selectionStart = result.cursorPos;
+          textareaRef.current.selectionEnd = result.cursorPos;
+        }
+      }, 0);
+      return;
+    }
+    
+    // Handle arrow keys for Kannada suggestions
+    if (kannadaSuggestions.length > 0 && selectedLanguage === 'kannada') {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setActiveSuggestion(i => (i + 1) % kannadaSuggestions.length);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setActiveSuggestion(i => i <= 0 ? kannadaSuggestions.length - 1 : i - 1);
+        return;
+      }
+      if (e.key === 'Enter' && activeSuggestion >= 0) {
+        e.preventDefault();
+        applySuggestion(activeSuggestion);
+        return;
+      }
+    }
+  };
+  
+  const applySuggestion = (index) => {
+    if (!kannadaProcessor.current || index < 0 || index >= kannadaSuggestions.length) return;
+    
+    const result = kannadaProcessor.current.applySuggestion(
+      query,
+      textareaRef.current.selectionStart,
+      kannadaSuggestions[index]
+    );
+    
+    setQuery(result.text);
+    setKannadaSuggestions([]);
+    setActiveSuggestion(-1);
+    
+    // Set cursor position
+    setTimeout(() => {
+      if (textareaRef.current) {
+        textareaRef.current.selectionStart = result.cursorPos;
+        textareaRef.current.selectionEnd = result.cursorPos;
+      }
+    }, 0);
+  };
+  
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (kannadaProcessor.current) {
+        kannadaProcessor.current.cleanup();
+      }
+    };
+  }, []);
 
   const handleVoiceLanguageChange = (lang) => {
     setVoiceLanguage(lang);
@@ -556,7 +666,16 @@ export default function Dashboard() {
     setActiveSuggestion(-1);
     setIsLoading(true); setError(''); setResults(null); setSuggestion(null); setNoMatchMsg('');
     try {
-      const res = await api.post('/query/generate', { natural_query: query });
+      // Send original query + language context to backend
+      // Backend will handle semantic translation if needed
+      const payload = {
+        natural_query: query.trim(),
+        language: selectedLanguage,
+        response_language: selectedLanguage === 'kannada' ? 'kannada' : (selectedLanguage === 'mixed' ? 'mixed' : 'english')
+      };
+      
+      const res = await api.post('/query/generate', payload);
+      
       if (res.data.action_required === 'confirm') {
         setConfirmModal({ isOpen: true, data: res.data });
         setSecondConfirm(false);
@@ -619,14 +738,20 @@ export default function Dashboard() {
     // 4. Update the textarea to show the rebuilt query (so user can see what ran)
     setQuery(finalQuery);
 
-    // 5. Execute immediately
+    // 5. Execute immediately with language context
     setIsLoading(true);
     setError('');
     setResults(null);
     setSuggestion(null);
     setNoMatchMsg('');
     try {
-      const res = await api.post('/query/generate', { natural_query: finalQuery });
+      const payload = {
+        natural_query: finalQuery,
+        language: selectedLanguage,
+        response_language: selectedLanguage === 'kannada' ? 'kannada' : (selectedLanguage === 'mixed' ? 'mixed' : 'english')
+      };
+      
+      const res = await api.post('/query/generate', payload);
       if (res.data.action_required === 'confirm') {
         setConfirmModal({ isOpen: true, data: res.data });
         setSecondConfirm(false);
@@ -673,7 +798,12 @@ export default function Dashboard() {
       setQuery(naturalQuery);
       setIsLoading(true); setError('');
       try {
-        const res = await api.post('/query/generate', { natural_query: naturalQuery });
+        const payload = {
+          natural_query: naturalQuery,
+          language: selectedLanguage,
+          response_language: selectedLanguage === 'kannada' ? 'kannada' : (selectedLanguage === 'mixed' ? 'mixed' : 'english')
+        };
+        const res = await api.post('/query/generate', payload);
         if (res.data.data?.length > 0) {
           setResults({ ...res.data, _query: naturalQuery, intent: res.data.intent || 'full' });
         }
@@ -1080,22 +1210,20 @@ export default function Dashboard() {
                   
                   <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-2 focus-within:ring-2 focus-within:ring-blue-500 transition-all">
                     <form onSubmit={handleQuerySubmit} className="relative flex items-end">
-                      <textarea value={query} 
-                        onChange={e => {
-                          setQuery(e.target.value);
-                          // When user manually edits, release the entity lock so suggestions re-enable
-                          if (confirmedEntity.current) {
-                            const entityName = confirmedEntity.current.name.toLowerCase();
-                            if (!e.target.value.toLowerCase().includes(entityName)) {
-                              confirmedEntity.current = null;
-                            }
-                          }
-                          if (error) setError('');
-                          if (noMatchMsg) setNoMatchMsg('');
-                        }}
+                      <textarea 
+                        ref={textareaRef}
+                        value={query} 
+                        onChange={handleQueryChange}
                         placeholder={getPlaceholderText(selectedLanguage)}
                         className="w-full resize-none p-4 pb-12 outline-none text-slate-700 placeholder-slate-400 bg-transparent min-h-[90px] text-sm"
-                        onKeyDown={e => { 
+                        onKeyDown={(e) => {
+                          // Handle Kannada mode key events first
+                          if (selectedLanguage === 'kannada') {
+                            handleKeyDown(e);
+                            if (e.defaultPrevented) return;
+                          }
+                          
+                          // Live dropdown handling
                           if (showLiveDropdown && liveSuggestions.length > 0) {
                             if (e.key === 'ArrowDown') {
                               e.preventDefault();
@@ -1137,6 +1265,12 @@ export default function Dashboard() {
                             {voiceLanguage === 'kn-IN' ? 'ಆಲಿಸುತ್ತಿದೆ...' : 'Listening...'}
                           </span>
                         )}
+                        {selectedLanguage === 'kannada' && !isListening && (
+                          <div className="text-xs bg-green-50 text-green-700 px-3 py-1.5 rounded-lg border border-green-200 font-medium flex items-center gap-2">
+                            <Languages className="w-3.5 h-3.5" />
+                            <span>✨ Auto-convert: Type English → Get Kannada instantly!</span>
+                          </div>
+                        )}
                       </div>
                       <div className="absolute bottom-3 right-3">
                         <button type="submit" disabled={isLoading || !query.trim()}
@@ -1147,6 +1281,39 @@ export default function Dashboard() {
                         </button>
                       </div>
                     </form>
+                    
+                    {/* Kannada Transliteration Suggestions (Desh Kannada style) */}
+                    {selectedLanguage === 'kannada' && kannadaSuggestions.length > 0 && (
+                      <div className="absolute top-full left-0 right-0 mt-1 bg-white border-2 border-orange-300 rounded-xl shadow-2xl z-[100] overflow-hidden">
+                        <div className="px-3 py-2 bg-gradient-to-r from-orange-50 to-amber-50 border-b border-orange-100 flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Languages className="w-3.5 h-3.5 text-orange-600" />
+                            <span className="text-xs font-bold text-orange-700">
+                              ಕನ್ನಡ Suggestions (Space or Click to select)
+                            </span>
+                          </div>
+                          <span className="text-[10px] text-slate-500 italic">↑↓ navigate · Space/Enter select</span>
+                        </div>
+                        <div className="max-h-48 overflow-y-auto">
+                          {kannadaSuggestions.map((suggestion, idx) => (
+                            <button
+                              key={idx}
+                              onClick={() => applySuggestion(idx)}
+                              onMouseEnter={() => setActiveSuggestion(idx)}
+                              className={`w-full text-left px-4 py-3 transition-all border-b border-orange-50 last:border-0
+                                ${idx === activeSuggestion 
+                                  ? 'bg-orange-100 border-l-4 border-l-orange-500 font-semibold' 
+                                  : 'hover:bg-orange-50'}`}
+                            >
+                              <span className="text-lg text-slate-800">{suggestion}</span>
+                              {idx === 0 && (
+                                <span className="ml-2 text-xs text-orange-600 font-medium">(Press Space)</span>
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {/* Language-aware example queries */}
@@ -1339,7 +1506,7 @@ export default function Dashboard() {
                     <div className="p-5 space-y-4">
                       {showCombined && <CombinedStudentView data={data} responseLanguage={responseLanguage} />}
                       {showGpa && <GpaTable data={data} />}
-                      {showGeneric && <GenericTable data={data} />}
+                      {showGeneric && <GenericTable data={data} responseLanguage={selectedLanguage} />}
                       {showChart && <ResultChart data={data} query={results._query} />}
                       {data.length === 0 && !suggestion && (
                         <div className="flex items-center justify-center py-8 text-slate-400 text-sm">

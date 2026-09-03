@@ -1,2 +1,0 @@
-{"sessionId":"29bcae","runId":"registration_frontend_run1","hypothesisId":"H2","location":"Login.jsx","message":"register_click","data":{"username":"manoj","email":"manojjr183@gmail.com","role":"Admin"},"timestamp":1773418324257}
-{"sessionId":"29bcae","runId":"registration_frontend_run1","hypothesisId":"H2","location":"Login.jsx","message":"register_error","data":{"message":"Network Error","code":"ERR_NETWORK","hasResponse":false,"status":null},"timestamp":1773418324613}

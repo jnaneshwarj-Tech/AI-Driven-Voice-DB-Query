@@ -101,19 +101,54 @@ def create_indexes():
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            cur.execute("SHOW INDEX FROM users WHERE Column_name='email' AND Non_unique=0")
+            if not cur.fetchone():
+                cur.execute("ALTER TABLE users ADD UNIQUE KEY uq_users_email (email)")
 
+            # ── Legacy link-based reset table (kept for backward compat) ────────
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS password_reset_tokens (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     user_id INT NOT NULL,
-                    token_hash VARCHAR(255) NOT NULL,
+                    token_hash CHAR(64) NOT NULL,
                     expires_at DATETIME NOT NULL,
                     used TINYINT(1) DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    INDEX idx_token_hash (token_hash),
-                    INDEX idx_user_id (user_id)
+                    INDEX idx_reset_token_hash (token_hash),
+                    INDEX idx_reset_user (user_id)
                 )
             """)
+
+            # ── New OTP-based password reset table ────────────────────────────
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS password_reset_requests (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id INT NOT NULL,
+                    otp_hash CHAR(64) NOT NULL,
+                    otp_created_at DATETIME NOT NULL,
+                    otp_expires_at DATETIME NOT NULL,
+                    otp_used_at DATETIME NULL,
+                    attempt_count INT NOT NULL DEFAULT 0,
+                    reset_token_hash CHAR(64) NULL,
+                    reset_token_expires_at DATETIME NULL,
+                    reset_token_used_at DATETIME NULL,
+                    created_ip VARCHAR(60) NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_prr_user (user_id),
+                    INDEX idx_prr_otp (otp_hash),
+                    INDEX idx_prr_reset_token (reset_token_hash(32)),
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            """)
+
+            # ── Cleanup expired OTP records older than 24 h ───────────────────
+            try:
+                cur.execute(
+                    "DELETE FROM password_reset_requests "
+                    "WHERE created_at < (NOW() - INTERVAL 24 HOUR)"
+                )
+            except Exception:
+                pass  # Non-critical cleanup
 
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS students (

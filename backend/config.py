@@ -16,25 +16,36 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 1000
 
-    # Email / SMTP Settings for Forgot Password
+    # ── Application identity ──────────────────────────────────────────────────
+    APP_NAME: str = "AI Database Automator"
+
+    # ── Email / SMTP Settings ─────────────────────────────────────────────────
     MAIL_SERVER: str = "smtp.gmail.com"
     MAIL_PORT: int = 587
     MAIL_USERNAME: str = ""
     MAIL_PASSWORD: str = ""
     MAIL_USE_TLS: bool = True
     MAIL_FROM: str = ""
+    MAIL_FROM_NAME: str = "AI Database Automator"
     FRONTEND_URL: str = "http://localhost:5173"
 
-    # Sprint 1 — Backup / Recovery settings
+    # ── OTP / Password Reset Settings ─────────────────────────────────────────
+    OTP_EXPIRY_SECONDS: int = 120          # 2 minutes
+    OTP_RESEND_COOLDOWN_SECONDS: int = 30  # 30-second cooldown between resends
+    OTP_MAX_ATTEMPTS: int = 5              # max wrong OTP attempts before lock
+    RESET_TOKEN_EXPIRY_MINUTES: int = 10   # reset_token validity after OTP verified
+    OTP_MAX_REQUESTS_PER_HOUR: int = 5     # rate-limit: max OTP requests per email/hour
+
+    # ── Sprint 1 — Backup / Recovery settings ─────────────────────────────────
     BACKUP_DIR: str = "backups"
-    BACKUP_RETENTION_DAILY: int = 7        # keep last N daily backups
-    BACKUP_RETENTION_WEEKLY: int = 4       # keep last N weekly backups
-    BACKUP_AUTO_ENABLED: bool = True       # auto-backup on schedule
-    UPLOAD_DIR: str = "uploads"            # persistent upload cache
-    MAX_UPLOAD_ROWS_PER_CHUNK: int = 500   # batch size for large uploads
-    UNDO_WINDOW_MINUTES_SINGLE: int = 5    # undo window for single ops
-    UNDO_WINDOW_MINUTES_BULK: int = 30     # undo window for bulk/upload ops
-    UNDO_RETENTION_DAYS: int = 30          # retain committed rollback snapshots
+    BACKUP_RETENTION_DAILY: int = 7
+    BACKUP_RETENTION_WEEKLY: int = 4
+    BACKUP_AUTO_ENABLED: bool = True
+    UPLOAD_DIR: str = "uploads"
+    MAX_UPLOAD_ROWS_PER_CHUNK: int = 500
+    UNDO_WINDOW_MINUTES_SINGLE: int = 5
+    UNDO_WINDOW_MINUTES_BULK: int = 30
+    UNDO_RETENTION_DAYS: int = 30
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -59,4 +70,3 @@ class Settings(BaseSettings):
         return path
 
 settings = Settings()
-# Force reload

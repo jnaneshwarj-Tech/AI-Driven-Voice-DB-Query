@@ -9,14 +9,16 @@ function App() {
   return (
     <Router>
       <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
-        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/login"            element={<Login />} />
+        <Route path="/register"         element={<Register />} />
+        {/* OTP-based 3-step password reset flow (email → OTP → new password) */}
+        <Route path="/forgot-password"  element={<ForgotPassword />} />
+        {/* Fallback for direct navigation with reset_token (old link-based compat) */}
         <Route path="/reset-password/:token" element={<ResetPassword />} />
-        <Route path="/reset-password" element={<ResetPassword />} />
-        <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="/" element={<Navigate to="/login" replace />} />
-        <Route path="*" element={<Navigate to="/login" replace />} />
+        <Route path="/reset-password"   element={<ResetPassword />} />
+        <Route path="/dashboard"        element={<Dashboard />} />
+        <Route path="/"                 element={<Navigate to="/login" replace />} />
+        <Route path="*"                 element={<Navigate to="/login" replace />} />
       </Routes>
     </Router>
   );

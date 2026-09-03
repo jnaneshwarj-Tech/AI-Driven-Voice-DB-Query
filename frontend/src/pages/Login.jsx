@@ -1,18 +1,35 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import api from '../services/api';
-import { Database, Lock, User, AlertCircle } from 'lucide-react';
+import { Database, Lock, User, AlertCircle, Mail } from 'lucide-react';
 
 export default function Login() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [email, setEmail] = useState('');
   const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [forgotMode, setForgotMode] = useState(false);
+  const [forgotStep, setForgotStep] = useState('email');
+  const [otp, setOtp] = useState('');
+  const [resetToken, setResetToken] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [secondsLeft, setSecondsLeft] = useState(120);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!forgotMode || forgotStep !== 'otp') return undefined;
+    setSecondsLeft(120);
+    const timer = window.setInterval(() => setSecondsLeft((seconds) => Math.max(0, seconds - 1)), 1000);
+    return () => window.clearInterval(timer);
+  }, [forgotMode, forgotStep]);
 
   const handleLogin = async (e) => {
     e.preventDefault();
     setError('');
+    setMessage('');
     setLoading(true);
 
     try {
@@ -47,6 +64,58 @@ export default function Login() {
     }
   };
 
+  const handleForgotPassword = async (e) => {
+    e.preventDefault();
+    setError('');
+    setMessage('');
+    setLoading(true);
+    try {
+      const response = await api.post('/auth/forgot-password', { username, email });
+      setMessage(response.data.message);
+      setForgotStep('otp');
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Unable to request a password reset.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerifyOtp = async (e) => {
+    e.preventDefault();
+    setError('');
+    setMessage('');
+    setLoading(true);
+    try {
+      const response = await api.post('/auth/verify-reset-otp', { email, otp });
+      setResetToken(response.data.reset_token);
+      setForgotStep('password');
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Unable to verify OTP.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResetPassword = async (e) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      await api.post('/auth/reset-password', { reset_token: resetToken, new_password: newPassword, confirm_password: confirmPassword });
+      setForgotMode(false);
+      setForgotStep('email');
+      setEmail('');
+      setOtp('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setMessage('Password reset successful. Please sign in with your new password.');
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Unable to reset password.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-900 flex flex-col justify-center py-12 sm:px-6 lg:px-8 bg-[url('https://images.unsplash.com/photo-1558486012-817176f84c6d?q=80&w=2400&auto=format&fit=crop')] bg-cover bg-center">
       <div className="absolute inset-0 bg-slate-900/80 backdrop-blur-sm"></div>
@@ -67,6 +136,41 @@ export default function Login() {
 
       <div className="relative mt-8 sm:mx-auto sm:w-full sm:max-w-md z-10">
         <div className="bg-slate-800/50 backdrop-blur-xl py-8 px-4 shadow-2xl sm:rounded-2xl sm:px-10 border border-slate-700">
+          {message && (
+            <div className="rounded-lg bg-emerald-500/10 p-4 border border-emerald-500/20 text-emerald-300">
+              <p className="text-sm font-medium">{message}</p>
+            </div>
+          )}
+          {forgotMode ? (
+            <form className="space-y-6" onSubmit={forgotStep === 'email' ? handleForgotPassword : forgotStep === 'otp' ? handleVerifyOtp : handleResetPassword}>
+              {error && <div className="rounded-lg bg-red-500/10 p-4 border border-red-500/20 flex items-center gap-3 text-red-400"><AlertCircle className="w-5 h-5" /><p className="text-sm font-medium">{error}</p></div>}
+              {forgotStep === 'email' && <>
+                <div>
+                  <label className="block text-sm font-medium text-slate-300">Username</label>
+                  <div className="mt-1 relative"><User className="absolute left-3 top-3 h-5 w-5 text-slate-500" /><input type="text" required value={username} onChange={(e) => setUsername(e.target.value)} className="block w-full pl-10 pr-3 py-2.5 border border-slate-600 rounded-xl bg-slate-900/50 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Your username" /></div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-300">Registered email</label>
+                  <div className="mt-1 relative"><Mail className="absolute left-3 top-3 h-5 w-5 text-slate-500" /><input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="block w-full pl-10 pr-3 py-2.5 border border-slate-600 rounded-xl bg-slate-900/50 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="you@example.com" /></div>
+                  <p className="mt-2 text-xs text-slate-400">Enter the email associated with your username</p>
+                </div>
+              </>}
+              {forgotStep === 'otp' && <div>
+                <label className="block text-sm font-medium text-slate-300">Enter the OTP sent to your email</label>
+                <input type="text" inputMode="numeric" pattern="[0-9]{6}" maxLength="6" required value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} className="mt-1 block w-full px-3 py-2.5 text-center tracking-[0.5em] border border-slate-600 rounded-xl bg-slate-900/50 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="000000" />
+                <p className="mt-2 text-sm text-slate-400">OTP expires in {String(Math.floor(secondsLeft / 60)).padStart(2, '0')}:{String(secondsLeft % 60).padStart(2, '0')}</p>
+              </div>}
+              {forgotStep === 'password' && <>
+                <div><label className="block text-sm font-medium text-slate-300">New password</label><input type="password" minLength="6" required value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="mt-1 block w-full px-3 py-2.5 border border-slate-600 rounded-xl bg-slate-900/50 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500" /></div>
+                <div><label className="block text-sm font-medium text-slate-300">Confirm new password</label><input type="password" minLength="6" required value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} className="mt-1 block w-full px-3 py-2.5 border border-slate-600 rounded-xl bg-slate-900/50 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500" /></div>
+              </>}
+              <button type="submit" disabled={loading} className="w-full py-2.5 px-4 rounded-xl text-sm font-semibold text-white bg-blue-600 hover:bg-blue-500 disabled:opacity-50">
+                {loading ? 'Please wait...' : forgotStep === 'email' ? 'Send OTP' : forgotStep === 'otp' ? 'Verify OTP' : 'Reset password'}
+              </button>
+              {forgotStep === 'otp' && <button type="button" onClick={handleForgotPassword} disabled={loading} className="w-full text-sm font-medium text-blue-400 hover:text-blue-300">Resend OTP</button>}
+              <button type="button" onClick={() => { setForgotMode(false); setError(''); setMessage(''); }} className="w-full text-sm font-medium text-blue-400 hover:text-blue-300">Back to sign in</button>
+            </form>
+          ) : (
           <form className="space-y-6" onSubmit={handleLogin}>
             {error && (
               <div className="rounded-lg bg-red-500/10 p-4 border border-red-500/20 flex items-center gap-3 text-red-400">
@@ -107,6 +211,7 @@ export default function Login() {
                   placeholder="••••••••"
                 />
               </div>
+              <button type="button" onClick={() => { setForgotMode(true); setError(''); setMessage(''); }} className="mt-2 text-sm font-medium text-blue-400 hover:text-blue-300">Forgot password?</button>
             </div>
 
             <div>
@@ -130,6 +235,7 @@ export default function Login() {
               </Link>
             </div>
           </form>
+          )}
         </div>
       </div>
     </div>

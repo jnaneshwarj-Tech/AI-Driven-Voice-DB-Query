@@ -70,6 +70,7 @@ def detect_language(text: str) -> str:
 
 _KANNADA_KEYWORDS: dict[str, str] = {
     # Actions
+    'ಶೋ': 'show',
     'ತೋರಿಸಿ': 'show',
     'ತೋರಿ': 'show',
     'ಪ್ರದರ್ಶಿಸಿ': 'display',
@@ -92,6 +93,8 @@ _KANNADA_KEYWORDS: dict[str, str] = {
     'ಸಂಪೂರ್ಣ ಪ್ರೊಫೈಲ್': 'complete profile',
 
     # Information words
+    'ಡೀಟೇಲ್ಸ್': 'details',
+    'ಇನ್ಫರ್ಮೇಶನ್': 'information',
     'ಮಾಹಿತಿ': 'information',
     'ಮಾಹಿತಿಯನ್ನು': 'information',
     'ವಿವರ': 'details',
@@ -100,14 +103,16 @@ _KANNADA_KEYWORDS: dict[str, str] = {
     'ದಾಖಲೆ': 'record',
 
     # Subject words
+    'ಸ್ಟೂಡೆಂಟ್': 'student',
+    'ಸ್ಟುಡೆಂಟ್': 'student',
     'ವಿದ್ಯಾರ್ಥಿ': 'student',
     'ವಿದ್ಯಾರ್ಥಿಗಳು': 'students',
     'ಅವರ': 'of',          # possessive: "Manoj ಅವರ" = "of Manoj"
     'ಅವನ': 'of',
     'ಅವಳ': 'of',
-    'ನ': '',              # possessive suffix, usually dropped
 
     # Academic
+    'ಮಾರ್ಕ್ಸ್': 'marks',
     'ಅಂಕ': 'marks',
     'ಅಂಕಗಳು': 'marks',
     'ಶ್ರೇಣಿ': 'grade',
@@ -156,6 +161,7 @@ _KANNADA_KEYWORDS: dict[str, str] = {
     'ಪೂರ್ಣ': 'full',
 
     # Connectors / particles (often dropped)
+    'ಆಫ್': 'of',
     'ಮತ್ತು': 'and',
     'ಅಥವಾ': 'or',
     'ಇನ್': 'in',
@@ -165,7 +171,6 @@ _KANNADA_KEYWORDS: dict[str, str] = {
     'ನಲ್ಲಿ': 'in',
     'ಆದ': 'who',
     'ಆದ': 'who',
-    'ನ': '',
 }
 
 # Compile sorted by length (longest first) to prevent partial replacements
@@ -343,8 +348,6 @@ def extract_search_term_multilingual(text: str) -> str | None:
         if _USN_PATTERN.match(tok):
             return tok
 
-    # Return joined remaining tokens as the name
-    # For Kannada names, the script characters will remain
     return ' '.join(candidate_tokens)
 
 

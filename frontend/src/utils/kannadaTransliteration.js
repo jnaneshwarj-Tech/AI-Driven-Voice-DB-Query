@@ -78,58 +78,62 @@ const COMMON_WORDS = {
   'kodi': 'ಕೊಡಿ',
   'huDuki': 'ಹುಡುಕಿ',
   'huDki': 'ಹುಡುಕಿ',
+  'huduki': 'ಹುಡುಕಿ',
+  'hudki': 'ಹುಡುಕಿ',
   
   // Information
   'mahiti': 'ಮಾಹಿತಿ',
   'mahithi': 'ಮಾಹಿತಿ',
+  'mahithi': 'ಮಾಹಿತಿ',
   'vivara': 'ವಿವರ',
   'vivarа': 'ವಿವರ',
+  'vivare': 'ವಿವರ',
   'sampoorna': 'ಸಂಪೂರ್ಣ',
   'sampoorne': 'ಸಂಪೂರ್ಣ',
+  'sampoorna': 'ಸಂಪೂರ್ಣ',
   'ella': 'ಎಲ್ಲಾ',
   'elaa': 'ಎಲ್ಲಾ',
+  'ellaa': 'ಎಲ್ಲಾ',
   'poorna': 'ಪೂರ್ಣ',
   'poorne': 'ಪೂರ್ಣ',
+  'poornam': 'ಪೂರ್ಣ',
   
   // People
   'avara': 'ಅವರ',
   'avaru': 'ಅವರು',
+  'avarа': 'ಅವರ',
+  'avru': 'ಅವರು',
   'vidyarthi': 'ವಿದ್ಯಾರ್ಥಿ',
   'vidyarthigalu': 'ವಿದ್ಯಾರ್ಥಿಗಳು',
-  'students': 'students', // Keep English
-  'student': 'student',
+  'vidyarthigala': 'ವಿದ್ಯಾರ್ಥಿಗಳ',
+  'vidyarthy': 'ವಿದ್ಯಾರ್ಥಿ',
+  'vidyarthygalu': 'ವಿದ್ಯಾರ್ಥಿಗಳು',
   
   // Academic
   'anka': 'ಅಂಕ',
-  'marks': 'marks', // Keep English
-  'semester': 'semester', // Keep English
-  'sem': 'sem',
-  'cgpa': 'CGPA',
-  'sgpa': 'SGPA',
-  'gpa': 'GPA',
+  'ankagalu': 'ಅಂಕಗಳು',
+  'ankagala': 'ಅಂಕಗಳ',
   
   // Personal
   'thande': 'ತಂದೆ',
   'thayi': 'ತಾಯಿ',
-  'phone': 'phone', // Keep English
-  'email': 'email',
+  'hesaru': 'ಹೆಸರು',
+  'hesara': 'ಹೆಸರ',
   
   // Graduation
   'padavi': 'ಪದವಿ',
-  'graduate': 'graduate', // Keep English
-  'graduated': 'graduated',
+  'padeda': 'ಪಡೆದ',
+  'padedu': 'ಪಡೆದು',
+  'padeyalu': 'ಪಡೆಯಲು',
   
-  // Common phrases
+  // Location/Time
   'alli': 'ಅಲ್ಲಿ',
   'yalli': 'ಯಲ್ಲಿ',
   'ralli': 'ರಲ್ಲಿ',
+  'alli': 'ಅಲ್ಲಿ',
   'aada': 'ಆದ',
   'aadava': 'ಆದವ',
-  'list': 'list', // Keep English
-  'details': 'details',
-  'complete': 'complete',
-  'academic': 'academic',
-  'personal': 'personal',
+  'aadavaru': 'ಆದವರು',
   
   // Numbers - ordinals
   '1ne': '1ನೇ',
@@ -140,6 +144,28 @@ const COMMON_WORDS = {
   '6ne': '6ನೇ',
   '7ne': '7ನೇ',
   '8ne': '8ನೇ',
+  'omdane': 'ಒಂದನೇ',
+  'eradane': 'ಎರಡನೇ',
+  'moordane': 'ಮೂರನೇ',
+  'naakane': 'ನಾಲ್ಕನೇ',
+  
+  // Common names (frequently used in queries)
+  'manoj': 'ಮನೋಜ್',
+  'manja': 'ಮಂಜ',
+  'manju': 'ಮಂಜು',
+  'manjunath': 'ಮಂಜುನಾಥ್',
+  'biradar': 'ಬಿರಾದಾರ್',
+  'sahebgouda': 'ಸಾಹೇಬಗೌಡ',
+  'saheb': 'ಸಾಹೇಬ್',
+  'gouda': 'ಗೌಡ',
+  'gowda': 'ಗೌಡ',
+  'raj': 'ರಾಜ್',
+  'kumar': 'ಕುಮಾರ್',
+  'prasad': 'ಪ್ರಸಾದ್',
+  'ravi': 'ರವಿ',
+  'suresh': 'ಸುರೇಶ್',
+  'sudeep': 'ಸುದೀಪ್',
+  'sudeepa': 'ಸುದೀಪ',
 };
 
 // English technical terms that should NEVER be transliterated
@@ -179,6 +205,8 @@ function shouldPreserve(word) {
 /**
  * Transliterate a single word from Roman to Kannada
  * Returns the word as-is if it should be preserved
+ * 
+ * Enhanced with better phonetic mapping for common Kannada sounds
  */
 function transliterateWord(word) {
   if (!word || word.length === 0) return word;
@@ -192,10 +220,48 @@ function transliterateWord(word) {
     return COMMON_WORDS[lowerWord];
   }
   
-  // For now, return as-is for character-level transliteration
-  // (Full character-level transliteration can be complex; 
-  //  in production you'd use a library like `google-input-tools` or API)
-  // This basic version handles common words well
+  // Enhanced phonetic transliteration for common patterns
+  let result = word;
+  
+  // Common name patterns
+  const namePatterns = {
+    'manoj': 'ಮನೋಜ್',
+    'raj': 'ರಾಜ್',
+    'kumar': 'ಕುಮಾರ್',
+    'prasad': 'ಪ್ರಸಾದ್',
+    'prakash': 'ಪ್ರಕಾಶ್',
+    'suresh': 'ಸುರೇಶ್',
+    'ramesh': 'ರಮೇಶ್',
+    'ganesh': 'ಗಣೇಶ್',
+    'harish': 'ಹರೀಶ್',
+    'mahesh': 'ಮಹೇಶ್',
+    'dinesh': 'ದಿನೇಶ್',
+    'ravi': 'ರವಿ',
+    'shiva': 'ಶಿವ',
+    'krishna': 'ಕೃಷ್ಣ',
+    'vishnu': 'ವಿಷ್ಣು',
+  };
+  
+  if (namePatterns[lowerWord]) {
+    return namePatterns[lowerWord];
+  }
+  
+  // Action words
+  const actionWords = {
+    'show': 'ತೋರಿಸಿ',
+    'give': 'ಕೊಡಿ',
+    'find': 'ಹುಡುಕಿ',
+    'search': 'ಹುಡುಕಿ',
+    'display': 'ತೋರಿಸಿ',
+    'get': 'ತಗೆದುಕೊಳ್ಳಿ',
+  };
+  
+  if (actionWords[lowerWord]) {
+    return actionWords[lowerWord];
+  }
+  
+  // For unrecognized words, return as-is
+  // In production, you could add more sophisticated phonetic rules here
   return word;
 }
 
@@ -234,6 +300,138 @@ export function transliterateToKannada(text, autoDetect = true) {
   });
   
   return transliteratedWords.join(' ');
+}
+
+/**
+ * Use Google Input Tools for full phrase transliteration, with the local
+ * dictionary as an offline fallback.
+ * 
+ * IMPROVED: Now handles phrases at any typing speed by processing the entire
+ * text consistently. Uses word-level segmentation for better results.
+ * 
+ * @param {string} text - Full phrase to transliterate (e.g., "manoj avara mahiti torisi")
+ * @param {AbortSignal} signal - Optional abort signal for cancellation
+ * @returns {Promise<string>} - Transliterated Kannada text
+ */
+export async function transliterateWithGoogle(text, signal) {
+  console.log('[API] transliterateWithGoogle called with:', text);
+  if (!text) {
+    console.log('[API] Skipping - empty text');
+    return text || '';
+  }
+  
+  // DON'T skip if text has Kannada - we still need to convert English parts!
+  // Only skip if ALL words are already in Kannada or should be preserved
+  
+  try {
+    // Split text into segments - transliterate each segment separately for better accuracy
+    // This handles mixed English/Kannada better than single-phrase approach
+    const segments = text.split(/\s+/);
+    console.log('[API] Segments to process:', segments);
+    const transliteratedSegments = [];
+    
+    for (const segment of segments) {
+      if (!segment.trim()) {
+        transliteratedSegments.push('');
+        continue;
+      }
+      
+      // Skip if already Kannada
+      if (hasKannadaScript(segment)) {
+        console.log('[API] Segment already Kannada:', segment);
+        transliteratedSegments.push(segment);
+        continue;
+      }
+      
+      // Skip technical terms
+      if (shouldPreserve(segment)) {
+        console.log('[API] Preserving technical term:', segment);
+        transliteratedSegments.push(segment);
+        continue;
+      }
+      
+      // Check if it's a common word in our dictionary first (faster)
+      const lowerSegment = segment.toLowerCase();
+      if (COMMON_WORDS[lowerSegment]) {
+        console.log('[API] Found in dictionary:', segment, '→', COMMON_WORDS[lowerSegment]);
+        transliteratedSegments.push(COMMON_WORDS[lowerSegment]);
+        continue;
+      }
+      
+      // Otherwise, use Google Input Tools API for this segment
+      console.log('[API] Calling Google API for:', segment);
+      try {
+        const params = new URLSearchParams({
+          text: segment,
+          itc: 'kn-t-i0-und',
+          num: '1',
+          cp: '0',
+          cs: '1',
+          ie: 'utf-8',
+          oe: 'utf-8',
+        });
+        
+        const response = await fetch(
+          `https://inputtools.google.com/request?${params}`,
+          { signal, timeout: 3000 }
+        );
+        
+        if (response.ok) {
+          const payload = await response.json();
+          console.log('[API] Google response for', segment, ':', payload);
+          
+          // Response format: ["SUCCESS", [["original_text", ["candidate1", ...]], ...]]
+          if (payload && Array.isArray(payload) && payload[0] === 'SUCCESS' && 
+              payload[1] && payload[1].length > 0) {
+            const firstResult = payload[1][0];
+            if (firstResult && firstResult[1] && firstResult[1].length > 0) {
+              console.log('[API] Transliterated:', segment, '→', firstResult[1][0]);
+              transliteratedSegments.push(firstResult[1][0]);
+              continue;
+            }
+          }
+        }
+        
+        // If API call failed or returned unexpected format, try local dictionary
+        console.log('[API] Google API failed for', segment, ', using local dictionary');
+        transliteratedSegments.push(transliterateWord(segment));
+        
+      } catch (err) {
+        // On error, use local dictionary
+        console.error('[API] Error for segment', segment, ':', err);
+        transliteratedSegments.push(transliterateWord(segment));
+      }
+    }
+    
+    const result = transliteratedSegments.join(' ');
+    console.log('[API] Final result:', result);
+    return result;
+    
+  } catch (error) {
+    if (error.name === 'AbortError') throw error;
+    console.error('[API] Complete failure:', error);
+    return transliterateToKannada(text);
+  }
+}
+
+export async function translateKannadaToEnglish(text, signal) {
+  if (!text || !hasKannadaScript(text)) return text || '';
+  try {
+    const params = new URLSearchParams({
+      client: 'gtx',
+      sl: 'kn',
+      tl: 'en',
+      dt: 't',
+      q: text,
+    });
+    const response = await fetch(`https://translate.googleapis.com/translate_a/single?${params}`, { signal });
+    const payload = await response.json();
+    const translated = payload?.[0]?.map((part) => part?.[0] || '').join('');
+    return translated || text;
+  } catch (error) {
+    if (error.name === 'AbortError') throw error;
+    return text;
+  }
 }
 
 /**
@@ -276,11 +474,11 @@ export function getTransliterationSuggestions(text) {
 export function getPlaceholderText(language) {
   switch (language) {
     case 'kannada':
-      return 'ಇಲ್ಲಿ ನಿಮ್ಮ ಪ್ರಶ್ನೆಯನ್ನು ನಮೂದಿಸಿ...';
+      return 'Type in English → See live Kannada suggestions → Press Space to select! Try: sudeep, manoj, mahiti';
     case 'mixed':
-      return 'Search / ನಿಮ್ಮ ಪ್ರಶ್ನೆ...';
+      return 'Type in any language... (ಯಾವುದೇ ಭಾಷೆಯಲ್ಲಿ ಟೈಪ್ ಮಾಡಿ)';
     default:
-      return 'Search / Ask anything...';
+      return 'Search / Ask anything... "Show marks of Manoj", "Top 10 students", etc.';
   }
 }
 

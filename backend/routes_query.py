@@ -5,7 +5,7 @@ Features:
   - Conditional extraction: "personal" → personal only, "academic" → marks only.
   - Multiple same-name students → ambiguity selection, never auto-merge.
 """
-import json, time, re
+import json, time, re, logging
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -24,6 +24,7 @@ from kannada_processor import (
 )
 
 router = APIRouter(prefix="/api/query", tags=["Query Engine"])
+logger = logging.getLogger(__name__)
 
 def _normalize_usn(raw: str) -> str:
     return re.sub(r'[^A-Za-z0-9]', '', str(raw) or '').upper()
@@ -457,6 +458,8 @@ def _build_update_request(nq: str) -> dict | None:
 
 class QueryRequest(BaseModel):
     natural_query: str
+    language: str = 'english'  # 'english', 'kannada', or 'mixed'
+    response_language: str = 'english'  # Response language preference
 
 class ExecuteRequest(BaseModel):
     query_dict: dict
@@ -786,17 +789,51 @@ def suggest_students(q: str, current_user: dict = Depends(get_current_user)):
 def generate_query(request: QueryRequest, current_user: dict = Depends(get_current_user)):
     start = time.time()
     nq = request.natural_query.strip()
+    language = getattr(request, 'language', 'english')
+    response_language = getattr(request, 'response_language', 'english')
+    
+    # DEBUG: Log received parameters
+    logger.info(f"[DEBUG] Received query: {nq[:50]}...")
+    logger.info(f"[DEBUG] Language mode: {language}")
+    logger.info(f"[DEBUG] Response language: {response_language}")
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # CRITICAL: Semantic Kannada → English Translation
+    # ──────────────────────────────────────────────────────────────────────────
+    # If query is in Kannada/mixed, translate to English BEFORE entering pipeline.
+    # This ensures the SAME existing pipeline handles all languages.
+    
+    original_query = nq  # Preserve original query for logging/display
+    translation_metadata = None
+    
+    if language in ('kannada', 'mixed'):
+        from translation_service import translate_query_if_needed
+        try:
+            nq, translation_metadata = translate_query_if_needed(nq, language)
+            logger.info(f"[TRANSLATE] Original: {original_query[:80]}")
+            logger.info(f"[TRANSLATE] Translated: {nq[:80]}")
+            logger.info(f"[TRANSLATE] Method: {translation_metadata.get('translation_method')}")
+            logger.info(f"[TRANSLATE] Confidence: {translation_metadata.get('translation_confidence', 0):.2f}")
+        except Exception as e:
+            logger.error(f"[TRANSLATE] Translation failed: {e}")
+            # Fallback: use keyword normalization
+            normalized_nq, detected_lang = kn_normalize_query(nq)
+            nq = normalized_nq
+            logger.warning(f"[TRANSLATE] Fallback to keyword normalization")
 
     # Sprint 2: Detect language BEFORE intent check (for response labeling)
-    response_language = kn_detect_language(nq)
+    # Use response_language from request if provided
+    if not response_language or response_language == 'english':
+        response_language = kn_detect_language(original_query)
 
     # Sprint 2: Normalize Kannada/mixed queries for intent detection
+    # (This is now redundant if translation happened, but kept for backward compat)
     normalized_nq, _ = kn_normalize_query(nq)
 
     # Use normalized query for intent detection (keeps existing engine intact)
     intent = _detect_intent(normalized_nq)
     # Also check original query for Kannada complete-profile phrases
-    if intent != 'complete_profile' and is_complete_profile_intent(nq):
+    if intent != 'complete_profile' and is_complete_profile_intent(original_query):
         intent = 'complete_profile'
 
     partial_update = _build_update_request(nq) if re.match(r'^\s*update\b', nq, re.I) else None
