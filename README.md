@@ -100,13 +100,43 @@ Results, history, audit details, and export actions return to the dashboard
 | Kannada input | Phrase transliteration, mixed-language handling, space/pause processing, Google API integration, and local fallback | `frontend/src/utils/`, `frontend/src/pages/Dashboard.jsx`, `backend/kannada_processor.py` |
 | Recovery and reporting | Backup/restore, undo windows, audit history, and PDF/Excel/CSV exports | `backend/routes_backup.py`, `backend/routes_export.py`, `backend/graduation_manager.py` |
 
-## Supporting Documentation
-The README is the primary project guide. Detailed implementation notes and setup records are retained here for troubleshooting and handover:
+### Kannada Implementation Details
+- English phonetic input is converted to Kannada while the user types.
+- Complete phrases are sent with context, so later words are not lost.
+- Space-key conversion, smart delay detection, mixed Kannada/English text, numbers, names, and database identifiers are supported.
+- Google Input Tools provides transliteration, with a local dictionary fallback when the service is unavailable.
+- Kannada voice input, backend semantic translation, language selection, fuzzy search, and response-language modes use the same query pipeline.
+- Entity values such as USNs, names, table names, and column names are protected during translation.
 
+### Authentication and Password Reset Details
+- Registration and login use hashed passwords, JWT access tokens, and role-based permissions.
+- Password reset requests do not reveal whether an email address exists.
+- OTPs have expiry, resend cooldowns, request rate limits, maximum-attempt locking, and one-account-per-email enforcement.
+- Reset tokens are short-lived, single-use, and issued only after successful OTP verification.
+- SMTP settings support Gmail and other providers; development mode can be used for local testing.
+
+### Query and Data Safety Details
+- User intent is converted to SQL only after schema context is collected.
+- Generated SQL is validated before execution to block unsafe statements and injection patterns.
+- Uploads are parsed in batches, validated against the active schema, and recorded for audit and undo operations.
+- Fuzzy matching helps resolve spelling variations without changing protected identifiers.
+
+## Supporting Documentation
+The README is the primary project guide and consolidated implementation reference. Detailed implementation notes and setup records are retained here for troubleshooting and handover:
+
+- [Context and phrase transliteration fix](CONTEXT_UPDATE_KANNADA_FIX.md)
+- [Kannada transliteration debugging](DEBUG_KANNADA.md)
+- [English-to-Kannada typing guide](ENGLISH_TO_KANNADA_TYPING.md)
+- [Final Kannada transliteration fix](FINAL_KANNADA_FIX.md)
+- [Google transliteration integration](GOOGLE_OFFICIAL_API.md)
 - [Kannada implementation](KANNADA_IMPLEMENTATION_COMPLETE.md)
 - [Kannada keyboard setup](KANNADA_KEYBOARD_SETUP.md)
-- [Google transliteration integration](GOOGLE_OFFICIAL_API.md)
+- [Kannada transliteration fix](KANNADA_TRANSLITERATION_FIX.md)
 - [Password reset system](PASSWORD_RESET_SYSTEM_COMPLETE.md)
+- [Quick Kannada start](QUICK_START_KANNADA.md)
+- [Simple Kannada input solution](SIMPLE_SOLUTION.md)
+- [Smart space detection](SMART_SPACE_DETECTION.md)
+- [Space-key transliteration](SPACE_KEY_TRANSLITERATION.md)
 - [Kannada testing guide](TEST_KANNADA_NOW.md)
 
 ## Project Structure
