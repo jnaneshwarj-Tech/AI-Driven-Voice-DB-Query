@@ -33,6 +33,9 @@ It is built for:
 - Query history and activity tracking
 - Undo/restore support for changed records
 - Branded PDF/Excel/CSV report export
+- Kannada transliteration for English-typed Kannada queries
+- Kannada and English mixed-input handling
+- Forgot-password flow with OTP verification and reset tokens
 
 ## Technology Stack
 - Frontend: React, Vite, Tailwind CSS
@@ -125,21 +128,24 @@ npm run dev
 - academic reporting and export
 
 ## Project Status
-This project is structured as a strong academic and portfolio-ready system, suitable for:
-- GitHub portfolio presentation
-- internship and placement evaluation
-- academic project demonstrations
-- real-world AI + database application showcase
+The README is the single source of truth for project implementation and progress.
 
-## Notes
-This repository is maintained in a clean, professional layout so that mentors, evaluators, and recruiters can understand the purpose, technology, and impact of the project from a single page.
+### Implemented
+- Natural-language text and voice queries converted into schema-aware SQL
+- SQL safety validation, injection protection, fuzzy matching, and query history
+- CSV/Excel upload, validation, bulk ingestion, undo/restore, and report export
+- Role-based authentication for admin and staff users
+- Forgot-password workflow using email OTP verification and short-lived reset tokens
+- Kannada transliteration using the Google Input Tools API with local fallback handling
+- Kannada input support for complete phrases, mixed English/Kannada text, and pauses between words
+- MySQL schema initialization and automatic database-column support
 
----
+### Planned
+- Add automated end-to-end coverage for voice queries, Kannada input, uploads, and password reset
+- Add production deployment configuration and secrets-management guidance
+- Add screenshots, a maintained architecture diagram, and a short demonstration video
+- Improve observability with structured backend logs and user-facing error diagnostics
 
-If you want, I can also make the next version even more polished by adding:
-- a proper project logo/header banner
-- screenshots section
-- architecture diagram section
-- features in badge format
-- a short project demo summary for recruiters
+### Project Presentation
+This project is suitable for GitHub portfolio presentation, internship and placement evaluation, academic demonstrations, and real-world AI/database application showcases.
 
