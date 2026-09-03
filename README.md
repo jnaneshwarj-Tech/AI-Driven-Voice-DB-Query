@@ -63,6 +63,52 @@ The system follows a clean layered structure:
 5. Security layer
    - blocks unsafe or malicious SQL patterns
 
+## End-to-End Workflow
+```text
+User signs in
+   |
+   v
+User enters text, speaks a query, or types Kannada phonetically
+   |
+   v
+Frontend normalizes input and sends it to the FastAPI backend
+   |
+   v
+Backend loads the database schema and builds AI context
+   |
+   v
+AI service generates SQL from the user's intent
+   |
+   v
+Security validator checks the SQL before execution
+   |
+   v
+Query engine executes approved read/write operations in MySQL
+   |
+   v
+Results, history, audit details, and export actions return to the dashboard
+```
+
+## Major Implementation
+| Area | Implementation | Main locations |
+| --- | --- | --- |
+| Authentication | JWT login, role checks, password reset, email OTP, and reset-token expiry | `backend/auth.py`, `backend/routes_auth.py`, `frontend/src/pages/ForgotPassword.jsx` |
+| AI query engine | Schema-aware prompting, SQL generation, query execution, and result formatting | `backend/llm_service.py`, `backend/query_engine.py`, `backend/rag_sql_generator.py` |
+| Query security | Validation of generated SQL and protection against unsafe or destructive input | `backend/query_security_validator.py` |
+| Database management | MySQL connection, schema initialization, dynamic columns, and canonical field mapping | `backend/database.py`, `backend/auto_schema_manager.py`, `database/schema.sql` |
+| Data ingestion | CSV/Excel parsing, validation, bulk inserts, and duplicate handling | `backend/file_parser.py`, `backend/routes_files.py` |
+| Kannada input | Phrase transliteration, mixed-language handling, space/pause processing, Google API integration, and local fallback | `frontend/src/utils/`, `frontend/src/pages/Dashboard.jsx`, `backend/kannada_processor.py` |
+| Recovery and reporting | Backup/restore, undo windows, audit history, and PDF/Excel/CSV exports | `backend/routes_backup.py`, `backend/routes_export.py`, `backend/graduation_manager.py` |
+
+## Supporting Documentation
+The README is the primary project guide. Detailed implementation notes and setup records are retained here for troubleshooting and handover:
+
+- [Kannada implementation](KANNADA_IMPLEMENTATION_COMPLETE.md)
+- [Kannada keyboard setup](KANNADA_KEYBOARD_SETUP.md)
+- [Google transliteration integration](GOOGLE_OFFICIAL_API.md)
+- [Password reset system](PASSWORD_RESET_SYSTEM_COMPLETE.md)
+- [Kannada testing guide](TEST_KANNADA_NOW.md)
+
 ## Project Structure
 ```text
 major/
@@ -71,10 +117,12 @@ major/
 ├── database/        # database setup and schema support
 ├── src/             # shared source modules
 ├── public/          # public frontend assets
+├── README.md        # primary project guide, workflow, and implementation status
+├── *KANNADA*.md     # retained Kannada implementation and troubleshooting notes
+├── *PASSWORD*.md    # retained password-reset implementation notes
 ├── package.json     # frontend package metadata
 ├── package-lock.json
 ├── .gitignore       # generated files ignored by Git
-├── README.md        # project overview and setup guide
 └── ...
 ```
 
@@ -128,7 +176,7 @@ npm run dev
 - academic reporting and export
 
 ## Project Status
-The README is the single source of truth for project implementation and progress.
+The README is the primary source of truth for project implementation and progress. Supporting documents preserve detailed setup and troubleshooting context.
 
 ### Implemented
 - Natural-language text and voice queries converted into schema-aware SQL
