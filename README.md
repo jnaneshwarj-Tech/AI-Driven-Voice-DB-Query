@@ -121,23 +121,59 @@ Results, history, audit details, and export actions return to the dashboard
 - Uploads are parsed in batches, validated against the active schema, and recorded for audit and undo operations.
 - Fuzzy matching helps resolve spelling variations without changing protected identifiers.
 
-## Supporting Documentation
-The README is the primary project guide and consolidated implementation reference. Detailed implementation notes and setup records are retained here for troubleshooting and handover:
+## Consolidated Implementation Record
+All implementation notes, fixes, setup instructions, test cases, and progress updates are maintained in this README. No separate feature-update files are required.
 
-- [Context and phrase transliteration fix](CONTEXT_UPDATE_KANNADA_FIX.md)
-- [Kannada transliteration debugging](DEBUG_KANNADA.md)
-- [English-to-Kannada typing guide](ENGLISH_TO_KANNADA_TYPING.md)
-- [Final Kannada transliteration fix](FINAL_KANNADA_FIX.md)
-- [Google transliteration integration](GOOGLE_OFFICIAL_API.md)
-- [Kannada implementation](KANNADA_IMPLEMENTATION_COMPLETE.md)
-- [Kannada keyboard setup](KANNADA_KEYBOARD_SETUP.md)
-- [Kannada transliteration fix](KANNADA_TRANSLITERATION_FIX.md)
-- [Password reset system](PASSWORD_RESET_SYSTEM_COMPLETE.md)
-- [Quick Kannada start](QUICK_START_KANNADA.md)
-- [Simple Kannada input solution](SIMPLE_SOLUTION.md)
-- [Smart space detection](SMART_SPACE_DETECTION.md)
-- [Space-key transliteration](SPACE_KEY_TRANSLITERATION.md)
-- [Kannada testing guide](TEST_KANNADA_NOW.md)
+### Kannada Input Processing
+1. The user selects Kannada mode or uses the native Windows Kannada keyboard.
+2. English phonetic text is collected without interrupting normal typing.
+3. A space key or short idle delay triggers conversion of the pending word or phrase.
+4. Complete phrases are sent to Google Input Tools so transliteration keeps word context.
+5. Kannada text, numbers, names, USNs, and mixed English/Kannada content are preserved correctly.
+6. A local dictionary handles common words immediately when the API is unavailable.
+7. Transliteration requests are locked and debounced to prevent overlapping responses and cursor jumps.
+8. Protected entities are excluded from translation before the backend sends the query to the AI service.
+
+### Kannada Fix History
+- Fixed the original first-word-only behavior by changing word-by-word API calls to complete-phrase requests.
+- Added space-key conversion so the previous word is translated immediately after a space.
+- Added smart delay detection so pauses between words no longer cancel conversion.
+- Reduced unnecessary request latency and added a local fallback dictionary.
+- Added mixed-language handling so already-Kannada text and English identifiers are not skipped or corrupted.
+- Added browser-console and backend-console diagnostics for API, timer, dictionary, and fallback states.
+
+### Kannada Testing Checklist
+- Hard-refresh the frontend after a transliteration change.
+- Select Kannada input mode and type a phonetic word such as `namaskara`.
+- Confirm the word with Space and verify it becomes Kannada.
+- Test multiple words with a pause between them, a complete sentence, numbers, names, and mixed English/Kannada text.
+- Verify that the query reaches the backend, SQL generation still succeeds, and database identifiers remain unchanged.
+- If Google conversion is unavailable, verify that local dictionary words still convert and ordinary English remains usable.
+
+### Password Reset Implementation
+- Registration rejects duplicate email addresses and login uses secure password hashing.
+- Forgot-password requests return the same public response whether or not an account exists.
+- OTPs are generated securely, expire after a short period, allow limited attempts, and lock after repeated failures.
+- OTP resend requests use a cooldown and hourly rate limit.
+- Successful OTP verification creates a short-lived, single-use reset token.
+- New passwords are validated, hashed, and stored without exposing credentials in logs or responses.
+- SMTP configuration supports Gmail and other providers; development mode supports local testing.
+- The database migration adds the OTP, reset-token, attempt-count, expiry, and cooldown fields required by the flow.
+
+### Query and Upload Implementation
+- The frontend sends text or voice intent to the backend through one query workflow.
+- The backend reads schema metadata, canonicalizes field names, and builds context for the AI model.
+- The generated SQL passes security validation before any database operation is allowed.
+- Query results include structured rows, history, and audit information for dashboard actions and exports.
+- CSV and Excel files are parsed, validated, mapped to the active schema, and inserted in chunks.
+- Upload changes support undo windows, duplicate handling, and backup/restore operations.
+
+### Troubleshooting Summary
+- Restart the frontend after source changes and use a hard browser refresh to clear Vite assets.
+- Check the browser console for transliteration timer/API messages and the backend console for translation/query errors.
+- Confirm the Google Input Tools endpoint is reachable; the local dictionary remains the fallback path.
+- Confirm the database migration has been executed before testing password reset.
+- Keep API keys, SMTP passwords, JWT secrets, and database passwords in `.env`; never commit them.
 
 ## Project Structure
 ```text
@@ -148,8 +184,6 @@ major/
 ├── src/             # shared source modules
 ├── public/          # public frontend assets
 ├── README.md        # primary project guide, workflow, and implementation status
-├── *KANNADA*.md     # retained Kannada implementation and troubleshooting notes
-├── *PASSWORD*.md    # retained password-reset implementation notes
 ├── package.json     # frontend package metadata
 ├── package-lock.json
 ├── .gitignore       # generated files ignored by Git
