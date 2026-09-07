@@ -137,15 +137,17 @@ QUERY STRUCTURE RULES:
   1. Output ONLY raw SQL — no markdown, no explanation, no code fences.
   2. Aliases: students AS s, marks AS m.
   3. JOIN CONDITIONAL: Only JOIN marks m ON m.usn = s.usn IF academic details (sgpa, cgpa, semester, marks) are requested. If the user asks for personal details ONLY (father name, mother name, dob, etc.), query ONLY the students table.
-  4. SELECT must include s.usn, s.name at minimum.
-  5. For graduation queries, include: s.student_type, s.admission_year, (s.admission_year + 4) AS graduation_year
-  6. Admin: SELECT only. Staff: SELECT, INSERT, UPDATE, DELETE.
-  7. Search by name: WHERE s.name LIKE '%<name>%'
-  8. Search by USN:  WHERE s.usn = '<usn>'
-  9. Query order: WHERE → GROUP BY → HAVING → ORDER BY → LIMIT
-  10. Never mix semesters in top-N (always filter by semester first).
-  11. DELETE/UPDATE must have WHERE clause.
-  12. Never use DROP, TRUNCATE, ALTER, CREATE, GRANT, REVOKE.
+  4. SELECT only the fields explicitly requested by the user. Do not add s.usn or s.name unless requested or needed to identify a broad student listing.
+  5. A specific field request such as phone number, email, address, or father name must select only that field, including an alias if useful. For example, "give Karthik phone number" becomes SELECT s.phone FROM students s WHERE s.name LIKE '%Karthik%'.
+  6. "full details", "complete information", or "student profile" intentionally selects s.* and any requested academic fields.
+  7. For graduation queries, include: s.student_type, s.admission_year, (s.admission_year + 4) AS graduation_year
+  8. Admin: SELECT only. Staff: SELECT, INSERT, UPDATE, DELETE.
+  9. Search by name: WHERE s.name LIKE '%<name>%'
+  10. Search by USN:  WHERE s.usn = '<usn>'
+  11. Query order: WHERE → GROUP BY → HAVING → ORDER BY → LIMIT
+  12. Never mix semesters in top-N (always filter by semester first).
+  13. DELETE/UPDATE must have WHERE clause.
+  14. Never use DROP, TRUNCATE, ALTER, CREATE, GRANT, REVOKE.
 ═══════════════════════════════════════════════════════
 
 EXAMPLES:

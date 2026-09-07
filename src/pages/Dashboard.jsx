@@ -93,7 +93,7 @@ function GenericTable({ data }) {
               {headers.map(h => (
                 <th key={h} onClick={() => toggleSort(h)}
                   className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer hover:bg-slate-100 whitespace-nowrap select-none">
-                  {h.replace(/_/g, ' ')} {sortCol === h ? (sortDir === 'asc' ? '↑' : '↓') : ''}
+                  {h} {sortCol === h ? (sortDir === 'asc' ? '↑' : '↓') : ''}
                 </th>
               ))}
             </tr>

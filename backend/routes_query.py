@@ -25,6 +25,7 @@ from kannada_processor import (
 
 router = APIRouter(prefix="/api/query", tags=["Query Engine"])
 logger = logging.getLogger(__name__)
+_CACHE_VERSION = "selected-columns-v2:"
 
 def _normalize_usn(raw: str) -> str:
     return re.sub(r'[^A-Za-z0-9]', '', str(raw) or '').upper()
@@ -514,7 +515,7 @@ def _get_cache(natural_query: str):
             cur = conn.cursor(dictionary=True)
             cur.execute(
                 "SELECT sql_query, result_json FROM query_cache WHERE user_query=%s",
-                (natural_query[:255],)
+                (f"{_CACHE_VERSION}{natural_query}"[:255],)
             )
             row = cur.fetchone()
             cur.close()
@@ -532,7 +533,7 @@ def _set_cache(natural_query: str, sql: str, result: list):
             cur.execute(
                 "INSERT INTO query_cache (user_query, sql_query, result_json) VALUES (%s,%s,%s) "
                 "ON DUPLICATE KEY UPDATE sql_query=%s, result_json=%s, created_at=NOW()",
-                (natural_query[:255], sql, json.dumps(result, default=str),
+                (f"{_CACHE_VERSION}{natural_query}"[:255], sql, json.dumps(result, default=str),
                  sql, json.dumps(result, default=str))
             )
             conn.commit()
@@ -632,13 +633,74 @@ def _detect_intent(nq: str) -> str:
     return 'full'
 
 
-def _filter_by_intent(rows: list[dict], intent: str) -> list[dict]:
-    """Keep only columns relevant to the intent."""
-    # complete_profile and full → return all columns
-    if intent in ('full', 'complete_profile') or not rows:
-        return rows
-    allowed = _PERSONAL_FIELDS if intent == 'personal' else _ACADEMIC_FIELDS
-    return [{k: v for k, v in r.items() if k in allowed} for r in rows]
+def _split_select_items(select_text: str) -> list[str]:
+    """Split a SELECT list without splitting commas inside expressions."""
+    items, start, depth = [], 0, 0
+    for index, char in enumerate(select_text):
+        if char == '(':
+            depth += 1
+        elif char == ')':
+            depth = max(0, depth - 1)
+        elif char == ',' and depth == 0:
+            items.append(select_text[start:index].strip())
+            start = index + 1
+    items.append(select_text[start:].strip())
+    return [item for item in items if item]
+
+
+def _enforce_specific_select(nq: str, query_dict: dict) -> dict:
+    """Keep narrow personal requests narrow even if the LLM adds identity fields."""
+    if query_dict.get('operation', '').lower() != 'select':
+        return query_dict
+    if _COMPLETE_PROFILE_RE.search(nq) or is_complete_profile_intent(nq):
+        return query_dict
+
+    field_patterns = [
+        (r'\bphone\s*(?:number|no)?\b|\bmobile\b|\bcontact\s+number\b', 'phone'),
+        (r'\bemail\b|\bmail\b', 'email'),
+        (r'\baddress\b', 'address'),
+        (r'\bfather\s+name\b|\bdad(?:dy)?\s+name\b', 'father_name'),
+        (r'\bmother\s+name\b|\bmom(?:my)?\s+name\b', 'mother_name'),
+    ]
+    requested = [column for pattern, column in field_patterns if re.search(pattern, nq, re.I)]
+    if not requested:
+        return query_dict
+
+    sql = query_dict.get('sql', '')
+    match = re.match(r'(?is)^\s*SELECT\s+(.*?)\s+FROM\s+', sql)
+    if not match:
+        return query_dict
+
+    items = _split_select_items(match.group(1))
+    selected = []
+    for column in requested:
+        column_match = next(
+            (item for item in items if re.search(rf'(?i)(?:\b\w+\.)?`?{re.escape(column)}`?(?:\s+AS\s+\w+)?\s*$', item)),
+            None,
+        )
+        selected.append(column_match or f's.{column}')
+
+    query_dict = dict(query_dict)
+    query_dict['sql'] = f"SELECT {', '.join(selected)} FROM {sql[match.end():]}"
+    return query_dict
+
+
+def _filter_by_intent(rows: list[dict], intent: str, natural_query: str | None = None) -> list[dict]:
+    """Preserve SQL-selected columns, including aliases."""
+    if intent == 'personal' and natural_query:
+        requested = set()
+        for pattern, column in (
+            (r'\bphone\s*(?:number|no)?\b|\bmobile\b|\bcontact\s+number\b', 'phone'),
+            (r'\bemail\b|\bmail\b', 'email'),
+            (r'\baddress\b', 'address'),
+            (r'\bfather\s+name\b|\bdad(?:dy)?\s+name\b', 'father_name'),
+            (r'\bmother\s+name\b|\bmom(?:my)?\s+name\b', 'mother_name'),
+        ):
+            if re.search(pattern, natural_query, re.I):
+                requested.add(column)
+        if requested:
+            return [{k: v for k, v in row.items() if k in requested} for row in rows]
+    return rows
 
 
 # ── Multi-student ambiguity detection ─────────────────────────────────────────
@@ -723,11 +785,10 @@ def _check_ambiguity(data: list[dict], nq: str) -> dict | None:
 
 def _enrich_with_profile(data: list[dict], nq: str, intent: str) -> list[dict]:
     """
-    When user searches a single student by name (full/personal/complete_profile intent),
-    enrich data rows with all personal fields from the students table.
-    For complete_profile also add graduation data.
+    Full profile queries intentionally combine the profile with academic data.
+    Narrow SQL queries must remain exactly as returned by the database.
     """
-    if intent == 'academic':
+    if intent != 'complete_profile':
         return data
 
     usns = list(dict.fromkeys(r.get("usn", "") for r in data if r.get("usn")))
@@ -860,7 +921,7 @@ def generate_query(request: QueryRequest, current_user: dict = Depends(get_curre
     if not result["success"]:
         raise HTTPException(500, result["error_msg"])
 
-    query_dict = result["query_dict"]
+    query_dict = _enforce_specific_select(nq, result["query_dict"])
     if not (query_dict.get('operation') == 'update' and query_dict.get('executions')):
         validation = validate_sql_query(query_dict, current_user["role"])
         if not validation["is_valid"]:
@@ -912,7 +973,7 @@ def generate_query(request: QueryRequest, current_user: dict = Depends(get_curre
 
             if suggestion.get('auto_corrected'):
                 top = suggestion['suggestions'][0]
-                top_data = _filter_by_intent(top['data'], intent)
+                top_data = _filter_by_intent(top['data'], intent, nq)
                 return {
                     "action_required": "none",
                     "query": query_dict["sql"],
@@ -985,7 +1046,7 @@ def generate_query(request: QueryRequest, current_user: dict = Depends(get_curre
         if suggestion and stype in _actionable and suggestion.get('suggestions'):
             if suggestion.get('auto_corrected'):
                 top = suggestion['suggestions'][0]
-                top_data = _filter_by_intent(top['data'], intent)
+                top_data = _filter_by_intent(top['data'], intent, nq)
                 return {
                     "action_required": "none",
                     "query": str(e),

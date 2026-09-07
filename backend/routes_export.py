@@ -14,7 +14,7 @@ Excel: 3 sheets — Report, Student Info, Semester CGPA
 CSV: metadata section + personal section + academic section
 """
 
-import os, tempfile
+import json, os, tempfile
 from datetime import datetime
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
@@ -75,6 +75,18 @@ def _now_str() -> str:
     return datetime.now().strftime("%d %B %Y, %I:%M %p")
 
 
+def _result_headers(rows: list[dict]) -> list[str]:
+    """Return result columns in SQL/cursor order, including aliases."""
+    if not rows:
+        return []
+    headers = list(rows[0].keys())
+    for row in rows[1:]:
+        for key in row:
+            if key not in headers:
+                headers.append(key)
+    return headers
+
+
 # ── Shared export model ───────────────────────────────────────────────────────
 
 def _build_export_model(data: list[dict], user: dict) -> dict:
@@ -90,21 +102,10 @@ def _build_export_model(data: list[dict], user: dict) -> dict:
     for entry in data:
         cleaned_data.append({k: v for k, v in entry.items() if k not in _PHOTO_KEYS})
 
-    # ── Personal details (from first row if single student) ───────────────────
+    # The dashboard payload is the executed SELECT result. Keep its exact
+    # columns so exports cannot widen a narrow query into a student profile.
     student_details: dict = {}
-    if cleaned_data:
-        first = cleaned_data[0]
-        for k in _PERSONAL_KEYS:
-            v = first.get(k)
-            if v not in (None, "", "null"):
-                student_details[k] = v
-
-    # ── Academic rows ─────────────────────────────────────────────────────────
-    academic_rows = []
-    for r in cleaned_data:
-        row = {k: v for k, v in r.items() if k in _ACADEMIC_KEYS}
-        if row:
-            academic_rows.append(row)
+    academic_rows = cleaned_data
 
     # ── Semester-wise cumulative CGPA per student ─────────────────────────────
     groups: dict[str, list] = {}
@@ -115,7 +116,8 @@ def _build_export_model(data: list[dict], user: dict) -> dict:
     semester_wise_cgpa: dict = {}
     for key, rows in groups.items():
         sems = sorted(
-            [(r.get("semester", 0), float(r.get("sgpa") or 0)) for r in rows],
+            [(r.get("semester", 0), float(r.get("sgpa") or 0)) for r in rows
+             if r.get("semester") is not None and r.get("sgpa") is not None],
             key=lambda x: x[0]
         )
         running, cgpa_list = 0.0, []
@@ -272,7 +274,7 @@ def _build_branded_pdf(path: str, model: dict):
     # ── Generic academic table if no CGPA computed ────────────────────────────
     elif model.get("academic_rows"):
         acad = model["academic_rows"]
-        headers = list({k for r in acad for k in r.keys()})
+        headers = _result_headers(acad)
         page_w = A4[0] - 3*cm
         col_w  = page_w / max(len(headers), 1)
         td_data = [[h.replace("_", " ").title() for h in headers]] + \
@@ -401,7 +403,7 @@ def export_excel(data: list[dict], current_user: dict = Depends(get_current_user
     
     clean = [{k: v for k, v in r.items() if k not in _PHOTO_KEYS} for r in data]
     if clean:
-        headers = list(clean[0].keys())
+        headers = _result_headers(clean)
         # Replace headers with uppercase
         display_headers = [h.replace("_", " ").upper() for h in headers]
         ws.append(display_headers)
@@ -482,7 +484,7 @@ def export_csv(data: list[dict], current_user: dict = Depends(get_current_user))
         f.write("=== ACADEMIC DETAILS TABLE ===\n")
         clean = [{k: v for k, v in r.items() if k not in _PHOTO_KEYS} for r in data]
         if clean:
-            headers = list(clean[0].keys())
+            headers = _result_headers(clean)
             display_headers = [h.replace("_", " ").upper() for h in headers]
             f.write(",".join(display_headers) + "\n")
             for row in clean:
@@ -497,3 +499,15 @@ def export_csv(data: list[dict], current_user: dict = Depends(get_current_user))
         f.write(f"Generated on,{gen['timestamp']}\n")
 
     return FileResponse(path, filename="student_report.csv", media_type="text/csv")
+
+
+@router.post("/json")
+def export_json(data: list[dict], current_user: dict = Depends(get_current_user)):
+    """Export exactly the rows and columns returned by the executed SELECT."""
+    if not data:
+        raise HTTPException(400, "No data to export.")
+    _log_export("json", len(data), current_user["username"])
+    fd, path = tempfile.mkstemp(suffix=".json")
+    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, default=str, indent=2)
+    return FileResponse(path, filename="student_results.json", media_type="application/json")
