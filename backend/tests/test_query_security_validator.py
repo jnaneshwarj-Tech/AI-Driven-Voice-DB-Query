@@ -113,7 +113,7 @@ class QuerySecurityValidatorTests(unittest.TestCase):
     def test_personal_detail_lookup_is_parameterized(self):
         query = _rule_based_fallback_sql("What is Karthik S L's father name?")
         sql, params = query
-        self.assertIn("father_name", sql)
+        self.assertEqual(sql.split(" FROM ", 1)[0], "SELECT s.`father_name`")
         self.assertEqual(params, ["Karthik S L"])
 
     def test_location_results_never_trigger_name_ambiguity(self):

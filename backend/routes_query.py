@@ -858,10 +858,16 @@ def _filter_by_intent(rows: list[dict], intent: str, natural_query: str | None =
             (r'\b(?:date\s+of\s+birth|dob|birth\s+date)\b', 'dob'),
             (r'\bage\b', 'age'),
         ):
-            if re.search(pattern, natural_query, re.I):
+            match = re.search(pattern, natural_query, re.I)
+            if column == 'name' and match and re.search(
+                r"\b(?:father|mother|dad|mom)(?:['’]s)?\s+$",
+                natural_query[:match.start()],
+                re.I,
+            ):
+                continue
+            if match:
                 requested.add(column)
         if requested:
-            requested.update({'usn', 'name'})
             return [{k: v for k, v in row.items() if k in requested} for row in rows]
     return rows
 

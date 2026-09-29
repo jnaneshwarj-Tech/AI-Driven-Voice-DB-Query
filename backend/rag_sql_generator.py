@@ -439,7 +439,7 @@ def _student_lookup_query(effective_query: str):
         field_sql = f"s.`{selected_field}`"
     else:
         field_sql = "s.*"
-    columns = f"s.usn, s.name, {field_sql}" if selected_field else field_sql
+    columns = field_sql
     return (
         f"SELECT {columns} FROM students s WHERE {identity_sql} ORDER BY s.usn ASC",
         [identity_value],
