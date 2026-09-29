@@ -580,6 +580,27 @@ def restore_student(token: str, current_user: dict = Depends(get_current_user)):
     }
 
 
+# ── Recently deleted students ────────────────────────────────────────────────
+
+@router.get("/deleted")
+def get_recently_deleted(current_user: dict = Depends(get_current_user)):
+    """List the current user's deletions that are still inside the undo window."""
+    with db_conn() as conn:
+        cur = conn.cursor(dictionary=True)
+        cur.execute(
+            "SELECT usn, student_name, deleted_by, restore_token, timestamp "
+            "FROM deletion_logs "
+            "WHERE COALESCE(restored, 0)=0 AND restore_token IS NOT NULL "
+            "AND deleted_by=%s "
+            "AND timestamp >= DATE_SUB(NOW(), INTERVAL %s MINUTE) "
+            "ORDER BY timestamp DESC LIMIT 50",
+            (current_user["username"], settings.UNDO_WINDOW_MINUTES_SINGLE),
+        )
+        records = cur.fetchall()
+        cur.close()
+    return records
+
+
 # ── Unified 6-section activity logs ───────────────────────────────────────────
 
 @router.get("/activity")

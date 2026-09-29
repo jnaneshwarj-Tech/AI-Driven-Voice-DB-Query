@@ -170,7 +170,30 @@ _KANNADA_KEYWORDS: dict[str, str] = {
     'ರಲ್ಲಿ': 'in',
     'ನಲ್ಲಿ': 'in',
     'ಆದ': 'who',
-    'ಆದ': 'who',
+
+    # Romanized Kannada Conversational Keywords & Particles
+    'details kodu': 'details',
+    'details kodi': 'details',
+    'information beku': 'information',
+    'info beku': 'information',
+    'details beku': 'details',
+    'kodu': 'give',
+    'kodi': 'give',
+    'kodok': 'give',
+    'beku': '',
+    'biku': '',
+    'ge': '',
+    'kodi': 'give',
+    'vivara': 'details',
+    'viwara': 'details',
+    'mahithi': 'information',
+    'vaiyaktika': 'personal',
+    'shaikshanika': 'academic',
+    'yella': 'all',
+    'ellaa': 'all',
+    'ella': 'all',
+    'vidyarthigalu': 'students',
+    'vidyarthi': 'student',
 }
 
 # Compile sorted by length (longest first) to prevent partial replacements
@@ -289,7 +312,8 @@ _STOP_WORDS_EN = {
     'cgpa', 'sgpa', 'details', 'data', 'record', 'records', 'semester',
     'sem', 'result', 'results', 'top', 'best', 'highest', 'lowest',
     'complete', 'full', 'information', 'everything', 'entire', 'profile',
-    'academic', 'personal', 'both', 'tell',
+    'academic', 'personal', 'both', 'tell', 'kodu', 'kodi', 'kodok',
+    'beku', 'biku', 'ge', 'kodi', 'vivara', 'viwara', 'mahithi',
 }
 
 # Kannada stop words (after normalization these become English, but before
@@ -299,6 +323,7 @@ _STOP_WORDS_KN = {
     'ಮಾಹಿತಿ', 'ವಿವರ', 'ಅಂಕ', 'ಶ್ರೇಣಿ',
     'ಸಂಪೂರ್ಣ', 'ಎಲ್ಲಾ', 'ಎಲ್ಲ', 'ಪೂರ್ಣ',
     'ವಿದ್ಯಾರ್ಥಿ', 'ವಿದ್ಯಾರ್ಥಿಗಳು', 'ಅವರ', 'ಅವನ', 'ಅವಳ',
+    'ಕೊಡು', 'ಕೊಡಿ', 'ಬೇಕು', 'ಗೆ',
 }
 
 # USN pattern

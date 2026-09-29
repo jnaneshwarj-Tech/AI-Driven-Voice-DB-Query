@@ -9,14 +9,14 @@ import requests
 from config import settings
 
 GEMINI_MODEL_PRIORITY = [
-    # Newest models (2026-era) — current working models
+    # Modern stable models (fast & resilient to capacity spikes)
     "gemini-3.6-flash",              # Latest stable 3.6 series (fast)
-    "gemini-3.5-flash",              # Latest stable 3.5 series
-    "gemini-3.5-flash-lite",         # Lighter 3.5 variant
-    # Rolling aliases (always up-to-date)
+    "gemini-3.1-flash-lite",         # High availability fallback (fast & resilient to 503 spikes)
+    "gemini-3.1-flash-lite-preview", # Additional lightweight fallback
+    "gemini-3.5-flash",              # 3.5 series
+    # Rolling aliases
     "gemini-flash-latest",           # Rolling alias → current flash
     "gemini-flash-lite-latest",      # Rolling alias → current lite
-    "gemini-pro-latest",             # Rolling alias → current pro
 ]
 
 # Updated 2026-08 — removed EOL models (llama-3.1-70b, 8b, mixtral-8x22b all EOL'd 2026-08-26)
@@ -34,17 +34,36 @@ class LLMService:
     def __init__(self):
         self.api_key = getattr(settings, "GEMINI_API_KEY", "")
         self._config_model = getattr(settings, "GEMINI_MODEL", "")
+        fallback_cfg = getattr(settings, "GEMINI_FALLBACK_MODEL", "")
+        self._fallback_models: list[str] | None = [fallback_cfg] if fallback_cfg else None
         self._working_model: str | None = None
 
         self.is_nvidia = self.api_key.startswith("nvapi-")
 
-        # Validate Gemini key format early
-        if not self.is_nvidia and self.api_key and not self.api_key.startswith("AIza"):
+        # Validate Gemini key format early (supports AIza and AQ. prefixes)
+        if not self.is_nvidia and self.api_key and not (self.api_key.startswith("AIza") or self.api_key.startswith("AQ.")):
             print(
-                f"[LLM] WARNING: GEMINI_API_KEY does not look like a valid Gemini key "
-                f"(expected prefix 'AIza', got '{self.api_key[:8]}...'). "
+                f"[LLM] WARNING: GEMINI_API_KEY does not look like a standard Gemini key "
+                "(expected prefix 'AIza' or 'AQ.'). "
                 "Get your key at: https://aistudio.google.com/apikey"
             )
+
+    @property
+    def model(self) -> str:
+        if self._config_model:
+            return self._config_model
+        return NVIDIA_MODEL_PRIORITY[0] if self.is_nvidia else GEMINI_MODEL_PRIORITY[0]
+
+    @property
+    def fallback_models(self) -> list[str]:
+        if self._fallback_models is not None:
+            return self._fallback_models
+        defaults = NVIDIA_MODEL_PRIORITY if self.is_nvidia else GEMINI_MODEL_PRIORITY
+        return [m for m in defaults if m != self.model]
+
+    @fallback_models.setter
+    def fallback_models(self, models: list[str]):
+        self._fallback_models = models
 
     def _model_priority_list(self) -> list[str]:
         """Build deduped priority list for the active provider."""
@@ -52,13 +71,14 @@ class LLMService:
         result = []
         
         # If it's NVIDIA but the user configured a gemini model, ignore it
-        config_model = self._config_model
+        config_model = self.model
         if self.is_nvidia and "gemini" in config_model.lower():
-            config_model = None
+            config_model = NVIDIA_MODEL_PRIORITY[0]
             
         defaults = NVIDIA_MODEL_PRIORITY if self.is_nvidia else GEMINI_MODEL_PRIORITY
+        fallback_list = self.fallback_models or []
         
-        for m in [config_model] + defaults:
+        for m in [config_model] + fallback_list + defaults:
             if m and m not in seen:
                 seen.add(m)
                 result.append(m)
@@ -94,7 +114,7 @@ class LLMService:
             }
 
         try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=30)
+            resp = requests.post(url, headers=headers, json=payload, timeout=15)
             resp.raise_for_status()
             data = resp.json()
             
@@ -113,10 +133,11 @@ class LLMService:
 
         except requests.exceptions.HTTPError as e:
             code = e.response.status_code if e.response is not None else "?"
-            body = e.response.text if e.response is not None else ""
-            return None, f"HTTP {code} on {model}: {body[:200]}"
+            return None, f"HTTP {code} on {model}"
+        except requests.exceptions.Timeout:
+            return None, f"Timeout on {model}"
         except requests.exceptions.RequestException as e:
-            return None, f"Request error on {model}: {str(e)[:200]}"
+            return None, f"Network error on {model} ({type(e).__name__})"
 
     def generate_query(self, prompt: str) -> str:
         if not self.api_key:

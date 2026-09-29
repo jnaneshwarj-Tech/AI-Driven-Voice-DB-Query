@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS students (
     dob DATE,
     year_of_joining INT,
     current_sem INT DEFAULT 1,
+    region VARCHAR(20),
     father_name VARCHAR(150),
     mother_name VARCHAR(150),
     blood_group VARCHAR(5),

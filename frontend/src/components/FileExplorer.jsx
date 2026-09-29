@@ -29,6 +29,29 @@ function formatBytes(b) {
   return `${(b / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function formatErrorDetail(detail, fallback = 'Operation failed.') {
+  if (!detail) return fallback;
+  if (typeof detail === 'string') return detail;
+  if (typeof detail === 'object') {
+    const lines = [
+      detail.message || (detail.detail ? (typeof detail.detail === 'string' ? detail.detail : null) : null) || fallback,
+      detail.invalid_row_count != null ? `Invalid rows: ${detail.invalid_row_count}` : null,
+      detail.invalid_rows != null && typeof detail.invalid_rows === 'number' ? `Invalid rows: ${detail.invalid_rows}` : null,
+      detail.rows_parsed != null ? `Parsed: ${detail.rows_parsed}` : null,
+    ].filter(Boolean);
+    const sample = (detail.rejected_rows || detail.invalid_rows || [])
+      .filter(r => typeof r === 'object')
+      .slice(0, 3)
+      .map(r => `Row ${r.row_number || r.row_index || '?'}: ${r.reason || (r.errors || []).join('; ')}`)
+      .filter(Boolean);
+    if (sample.length > 0) {
+      lines.push(sample.join('; '));
+    }
+    return lines.length > 0 ? lines.join(' | ') : JSON.stringify(detail);
+  }
+  return String(detail);
+}
+
 export default function FileExplorer({ onDataLoaded }) {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -69,14 +92,23 @@ export default function FileExplorer({ onDataLoaded }) {
       await api.post('/files/upload', form, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
-      await fetchFiles();
-      setSuccessMsg(`"${file.name}" uploaded. Click "Update Database" to save data.`);
-      setTimeout(() => setSuccessMsg(''), 6000);
+      // Automatically attempt database import right after upload
+      setSuccessMsg(`"${file.name}" uploaded. Updating database...`);
+      try {
+        const res = await api.post(`/files/update-db/${encodeURIComponent(file.name)}`);
+        await fetchFiles();
+        setSuccessMsg(res.data.message || `"${file.name}" uploaded and saved to database.`);
+        setTimeout(() => setSuccessMsg(''), 7000);
+        if (onDataLoaded) onDataLoaded(res.data);
+      } catch (updateErr) {
+        await fetchFiles();
+        setError(formatErrorDetail(updateErr.response?.data?.detail, 'File uploaded, but database update failed. Check format.'));
+      }
     } catch (err) {
-      setError(err.response?.data?.detail || 'Upload failed.');
+      setError(formatErrorDetail(err.response?.data?.detail, 'Upload failed. Check file type and server connection.'));
     } finally {
       setUploading(false);
-      e.target.value = '';
+      if (e.target) e.target.value = '';
     }
   };
 
@@ -91,20 +123,7 @@ export default function FileExplorer({ onDataLoaded }) {
       setTimeout(() => setSuccessMsg(''), 6000);
       if (onDataLoaded) onDataLoaded(res.data);
     } catch (err) {
-      const detail = err.response?.data?.detail;
-      if (detail && typeof detail === 'object') {
-        const lines = [
-          detail.message || 'Import rejected.',
-          detail.invalid_row_count != null ? `Invalid rows: ${detail.invalid_row_count}` : null,
-          detail.rows_parsed != null ? `Parsed: ${detail.rows_parsed}` : null,
-        ].filter(Boolean);
-        const sample = (detail.rejected_rows || detail.invalid_rows || []).slice(0, 3)
-          .map(r => `Row ${r.row_number || r.row_index}: ${r.reason || (r.errors || []).join('; ')}`)
-          .filter(Boolean);
-        setError([...lines, ...sample].join(' | '));
-      } else {
-        setError(detail || 'Database update failed. Check file format.');
-      }
+      setError(formatErrorDetail(err.response?.data?.detail, 'Database update failed. Check file format.'));
     } finally {
       setUpdatingDb(null);
     }
@@ -134,7 +153,7 @@ export default function FileExplorer({ onDataLoaded }) {
       setPreviewData(prev => { const n = { ...prev }; delete n[filename]; return n; });
       if (expanded === filename) setExpanded(null);
     } catch (err) {
-      setError(err.response?.data?.detail || 'Delete failed.');
+      setError(formatErrorDetail(err.response?.data?.detail, 'Delete failed.'));
     }
   };
 

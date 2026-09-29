@@ -457,6 +457,20 @@ def get_live_suggestions(q: str, limit: int = 5) -> list[dict]:
     if not results and len(q) >= 2:
         results = fuzzy_search_students(q, limit=limit, min_score=0.15)
 
+    # Enrich suggestions with common query pattern completions
+    q_lower = q.lower().strip()
+    for s in results:
+        name = s.get('name', '')
+        phrases = [
+            name,
+            f"{name} details",
+            f"{name} personal details",
+            f"{name} academic details"
+        ]
+        # Filter phrases matching partial query if user typed beyond name
+        matching_phrases = [p for p in phrases if p.lower().startswith(q_lower) or q_lower in p.lower()]
+        s['suggested_phrases'] = matching_phrases if matching_phrases else phrases
+
     return results
 
 

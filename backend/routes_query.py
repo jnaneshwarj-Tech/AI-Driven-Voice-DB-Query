@@ -25,7 +25,7 @@ from kannada_processor import (
 
 router = APIRouter(prefix="/api/query", tags=["Query Engine"])
 logger = logging.getLogger(__name__)
-_CACHE_VERSION = "selected-columns-v2:"
+_CACHE_VERSION = "selected-columns-v5-address-location-current-sem:"
 
 def _normalize_usn(raw: str) -> str:
     return re.sub(r'[^A-Za-z0-9]', '', str(raw) or '').upper()
@@ -117,6 +117,82 @@ def _extract_target_and_field(left: str) -> tuple[str, str]:
     raise HTTPException(400, "Field not found.")
 
 
+def _match_update_field_prefix(text: str) -> tuple[str, str] | None:
+    """Recognize a field at the start of a subsequent update segment."""
+    candidate_text = re.sub(r'^\s*to\s+', '', text.strip(), flags=re.I)
+    words = candidate_text.split()
+    best_match = None
+    for count in range(1, len(words) + 1):
+        if words[count - 1].lower() == 'to':
+            break
+        field_text = ' '.join(words[:count])
+        canonical, _, confidence, _ = map_column(field_text)
+        if not canonical or normalize_header(field_text) == 'all_information':
+            continue
+        if confidence >= 0.8 or confidence == 0.0:
+            value_start = count
+            if value_start < len(words) and words[value_start].lower() == 'to':
+                value_start += 1
+            candidate = (
+                confidence,
+                count,
+                field_text,
+                ' '.join(words[value_start:]).strip(),
+            )
+            if best_match is None or candidate[:2] > best_match[:2]:
+                best_match = candidate
+    if best_match:
+        return best_match[2], best_match[3]
+    return None
+
+
+def _split_next_update_boundary(text: str) -> tuple[str, str, str] | None:
+    """Split value text when comma/and is followed by another known field."""
+    quote = None
+    escaped = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if escaped:
+            escaped = False
+            index += 1
+            continue
+        if quote:
+            if char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            index += 1
+            continue
+        if char in {'"', "'"}:
+            quote = char
+            index += 1
+            continue
+
+        separator = re.match(r',|\s+and\s+', text[index:], re.I)
+        if not separator:
+            index += 1
+            continue
+
+        field_match = _match_update_field_prefix(text[index + separator.end():])
+        if field_match:
+            field_text, field_value = field_match
+            return text[:index].strip(), field_text, field_value
+        index += separator.end()
+    return None
+
+
+def _strip_update_value_quotes(value: str, field: str) -> str:
+    value = value.strip()
+    if value.startswith(('"', "'")):
+        quote = value[0]
+        if len(value) < 2 or value[-1] != quote:
+            raise HTTPException(400, f"Unclosed quoted value for {field}.")
+        value = value[1:-1]
+        value = re.sub(r'\\([\\"\'])', r'\1', value)
+    return value
+
+
 def _parse_update_assignments(natural_query: str) -> dict:
     match = re.match(r'^\s*update\s+(.+)$', natural_query, re.I)
     if not match:
@@ -133,23 +209,31 @@ def _parse_update_assignments(natural_query: str) -> dict:
     if normalize_header(first_field) == 'all_information':
         raise HTTPException(400, "Please specify the information to update.")
 
-    value, rest = _split_value_and_rest(remainder)
-    if not value:
-        raise HTTPException(400, f"Invalid value for {first_field}.")
+    assignments = []
+    current_value_text = remainder
+    current_field = first_field
+    while True:
+        boundary = _split_next_update_boundary(current_value_text)
+        if boundary:
+            value, next_field, next_value_text = boundary
+            if not value:
+                raise HTTPException(400, f"Invalid value for {current_field}.")
+            assignments.append({
+                'field_text': current_field,
+                'value_text': _strip_update_value_quotes(value, current_field),
+            })
+            current_field = next_field
+            current_value_text = next_value_text
+            continue
 
-    assignments = [{'field_text': first_field, 'value_text': value}]
-
-    while rest:
-        next_to = re.search(r'\bto\b', rest, re.I)
-        if not next_to:
-            raise HTTPException(400, "Please specify the information to update.")
-        raw_field = rest[:next_to.start()].strip()
-        raw_value, rest = _split_value_and_rest(rest[next_to.end():].strip())
-        if not raw_field or not raw_value:
-            raise HTTPException(400, "Field not found.")
-        if normalize_header(raw_field) == 'all_information':
-            raise HTTPException(400, "Please specify the information to update.")
-        assignments.append({'field_text': raw_field, 'value_text': raw_value})
+        value = current_value_text.strip()
+        if not value:
+            raise HTTPException(400, f"Invalid value for {current_field}.")
+        assignments.append({
+            'field_text': current_field,
+            'value_text': _strip_update_value_quotes(value, current_field),
+        })
+        break
 
     return {
         'target_text': target,
@@ -246,11 +330,8 @@ def _resolve_assignment(conn, student: dict, assignment: dict) -> dict:
     else:
         column = canonical
 
-    if table == 'marks' and column not in table_columns['marks']:
-        column = _safe_column_name(raw_field)
-
-    if table == 'students' and column not in table_columns['students']:
-        column = _safe_column_name(raw_field)
+    if column not in table_columns[table]:
+        raise HTTPException(400, f"Field '{raw_field}' is not available in the database.")
 
     if column in {'usn', 'student_id'} and table == 'students':
         raise HTTPException(400, "Field not found.")
@@ -271,7 +352,9 @@ def _resolve_assignment(conn, student: dict, assignment: dict) -> dict:
                 sem = row['semester'] if row else 1
         current_semester = int(sem or 1)
 
-    validated_value = _validate_value(column, raw_value, table, table_columns[table].get(column))
+    validated_value = _validate_value(
+        column, raw_value, table, table_columns[table].get(column), raw_field
+    )
     return {
         'table': table,
         'column': column,
@@ -279,7 +362,7 @@ def _resolve_assignment(conn, student: dict, assignment: dict) -> dict:
         'raw_field': raw_field,
         'canonical_field': column,
         'semester': current_semester,
-        'create_if_missing': column not in table_columns[table],
+        'create_if_missing': False,
         'data_type': _choose_data_type(column, raw_field, validated_value, table),
     }
 
@@ -308,7 +391,13 @@ def _choose_data_type(column: str, raw_field: str, value, table: str) -> str:
     return 'VARCHAR(255)'
 
 
-def _validate_value(column: str, raw_value: str, table: str, existing_type: str | None):
+def _validate_value(
+    column: str,
+    raw_value: str,
+    table: str,
+    existing_type: str | None,
+    raw_field: str = '',
+):
     value_text = str(raw_value).strip()
     if not value_text:
         raise HTTPException(400, f"Invalid value for {column}.")
@@ -431,20 +520,7 @@ def _build_update_request(nq: str) -> dict | None:
                     'params': params,
                 })
 
-    stage_info = {
-        'RAW_QUERY': nq,
-        'INTENT': 'UPDATE',
-        'TARGET_TYPE': student_match['type'],
-        'TARGET': parsed['target_text'],
-        'NORMALIZED_TARGET': student['usn'] if student_match['type'] == 'USN' else parsed['target_text'],
-        'STUDENT_FOUND': student['usn'],
-        'FIELD_ASSIGNMENTS': [{
-            'field': a['field_text'],
-            'canonical': _safe_column_name(a['field_text']) if map_column(a['field_text'])[1] == 'passthrough' else map_column(a['field_text'])[0],
-            'value': a['value_text'],
-        } for a in parsed['assignments']],
-    }
-    print("UPDATE PIPELINE:", json.dumps(stage_info, default=str))
+    logger.debug("Prepared student update with %d field(s).", len(parsed['assignments']))
 
     return {
         'operation': 'update',
@@ -465,6 +541,65 @@ class QueryRequest(BaseModel):
 class ExecuteRequest(BaseModel):
     query_dict: dict
     original_query: str
+
+
+def _validate_structured_update(query_dict: dict) -> str | None:
+    affected_usns = query_dict.get('affected_usns')
+    if not isinstance(affected_usns, list) or len(affected_usns) != 1:
+        return "Update must target exactly one student."
+    usn = affected_usns[0]
+    if not isinstance(usn, str) or not usn.strip() or len(usn) > 100:
+        return "Update target is invalid."
+
+    executions = query_dict.get('executions')
+    if not isinstance(executions, list) or not executions or len(executions) > 2:
+        return "Update statements are invalid."
+
+    for execution in executions:
+        if not isinstance(execution, dict):
+            return "Update statement is invalid."
+        sql = execution.get('sql')
+        params = execution.get('params')
+        if not isinstance(sql, str) or not isinstance(params, (list, tuple)):
+            return "Update statement is invalid."
+
+        student_match = re.fullmatch(
+            r"UPDATE students SET ((?:`[a-z][a-z0-9_]*`=%s)(?:, `?[a-z][a-z0-9_]*`?=%s)*) WHERE usn=%s",
+            sql,
+            re.I,
+        )
+        if student_match:
+            columns = re.findall(r"`?([a-z][a-z0-9_]*)`?=%s", student_match.group(1), re.I)
+            if len(params) != len(columns) + 1 or params[-1] != usn:
+                return "Update values do not match the selected student."
+            if any(column.lower() in {'usn', 'student_id'} for column in columns):
+                return "Student identifiers cannot be changed."
+            table = 'students'
+        else:
+            marks_match = re.fullmatch(
+                r"INSERT INTO marks \(usn, semester, (`[a-z][a-z0-9_]*`(?:, `[a-z][a-z0-9_]*`)*)\) "
+                r"VALUES \(%s(?:, %s)+\) ON DUPLICATE KEY UPDATE "
+                r"(`[a-z][a-z0-9_]*`=%s(?:, `[a-z][a-z0-9_]*`=%s)*)",
+                sql,
+                re.I,
+            )
+            if not marks_match:
+                return "Update statement is invalid."
+            columns = re.findall(r"`([a-z][a-z0-9_]*)`", marks_match.group(1), re.I)
+            update_columns = re.findall(r"`([a-z][a-z0-9_]*)`=%s", marks_match.group(2), re.I)
+            value_count = len(columns)
+            if columns != update_columns or len(params) != 2 + (2 * value_count):
+                return "Academic update values are invalid."
+            if params[0] != usn or params[1] is None:
+                return "Academic update target is invalid."
+            if params[2 : 2 + value_count] != params[2 + value_count :]:
+                return "Academic update values do not match."
+            table = 'marks'
+
+    creations = query_dict.get('column_creations', [])
+    if not isinstance(creations, list) or creations:
+        return "Dynamic column definitions are invalid."
+    return None
 
 
 # ── Serialiser ────────────────────────────────────────────────────────────────
@@ -494,7 +629,7 @@ def _run_query(query_dict: dict) -> list:
     with db_conn() as conn:
         if op == "select":
             cur = conn.cursor(dictionary=True)
-            cur.execute(sql)
+            cur.execute(sql, query_dict.get("params", []))
             rows = [_serialize_row(r) for r in cur.fetchall()]
             cur.close()
             return rows
@@ -571,7 +706,7 @@ def _log_history(role: str, natural: str, sql: str, elapsed: float):
 # ── Query intent detection ────────────────────────────────────────────────────
 
 _PERSONAL_KEYWORDS = re.compile(
-    r'\b(personal|father|mother|dob|birth|blood|address|phone|email|aadhar|gender|religion|caste|family)\b',
+    r'\b(personal|father|mother|dob|birth|blood|address|village|district|state|phone|email|aadhar|gender|religion|caste|family)\b',
     re.IGNORECASE
 )
 _ACADEMIC_KEYWORDS = re.compile(
@@ -582,6 +717,7 @@ _ACADEMIC_KEYWORDS = re.compile(
 _PERSONAL_FIELDS = {
     "usn", "name", "dob", "father_name", "mother_name", "blood_group",
     "gender", "religion", "caste", "sub_caste", "category", "address",
+    "village", "district", "state", "region",
     "permanent_address", "current_address", "phone", "emergency_contact_number", "email", "aadhar_no",
     "year_and_branch", "year_of_joining", "status",
     "admission_year", "current_year", "student_type", "estimated_semester",
@@ -620,7 +756,19 @@ _COMPLETE_PROFILE_RE = re.compile(
 
 
 def _detect_intent(nq: str) -> str:
-    """Returns 'personal', 'academic', 'complete_profile', or 'full'."""
+    """Returns 'personal', 'academic', 'complete_profile', 'scalar_number', 'girls_names', or 'full'."""
+    if re.search(r'\b(?:how\s+many|count|number\s+of)\b.*\b(?:rural|urban)\b', nq, re.I):
+        return 'scalar_number'
+    if re.search(r'\bhow\s+many\s+students\b|\bcount\b.*\bcgpa\b|\bnumber\s+of\s+students\b', nq, re.I):
+        return 'scalar_number'
+    if re.search(r'\brural\b', nq, re.I):
+        return 'rural_search'
+    if re.search(r'\burban\b', nq, re.I):
+        return 'urban_search'
+    if re.search(r'\b(?:students?|student records?)\b.*\b(?:from|in|at|near)\b', nq, re.I):
+        return 'location_search'
+    if re.search(r'\b(?:give|show|list|get)?\s*only\s*(?:girls?|female|women)\s*names?\b|\b(?:girls?|female)\s*names?\s*only\b|\bgirls?\s*names?\b', nq, re.I):
+        return 'girls_names'
     # Check complete profile first (Kannada + English)
     if is_complete_profile_intent(nq) or _COMPLETE_PROFILE_RE.search(nq):
         return 'complete_profile'
@@ -631,6 +779,7 @@ def _detect_intent(nq: str) -> str:
     if has_academic and not has_personal:
         return 'academic'
     return 'full'
+
 
 
 def _split_select_items(select_text: str) -> list[str]:
@@ -656,6 +805,7 @@ def _enforce_specific_select(nq: str, query_dict: dict) -> dict:
         return query_dict
 
     field_patterns = [
+        (r'\b(?:student\s+)?name\b', 'name'),
         (r'\bphone\s*(?:number|no)?\b|\bmobile\b|\bcontact\s+number\b', 'phone'),
         (r'\bemail\b|\bmail\b', 'email'),
         (r'\baddress\b', 'address'),
@@ -687,20 +837,57 @@ def _enforce_specific_select(nq: str, query_dict: dict) -> dict:
 
 def _filter_by_intent(rows: list[dict], intent: str, natural_query: str | None = None) -> list[dict]:
     """Preserve SQL-selected columns, including aliases."""
+    if intent == 'girls_names' or (natural_query and re.search(r'\b(?:give|show|list|get|display)?\s*only\s*(?:girls?|female)\s*names?\b', natural_query, re.I)):
+        return [{'name': r.get('name')} for r in rows if r.get('name')]
+
     if intent == 'personal' and natural_query:
         requested = set()
         for pattern, column in (
+            (r'\b(?:usn|student\s+number)\b', 'usn'),
+            (r'\b(?:student\s+)?name\b', 'name'),
             (r'\bphone\s*(?:number|no)?\b|\bmobile\b|\bcontact\s+number\b', 'phone'),
             (r'\bemail\b|\bmail\b', 'email'),
             (r'\baddress\b', 'address'),
-            (r'\bfather\s+name\b|\bdad(?:dy)?\s+name\b', 'father_name'),
-            (r'\bmother\s+name\b|\bmom(?:my)?\s+name\b', 'mother_name'),
+            (r'\bvillage\b', 'village'),
+            (r'\bdistrict\b', 'district'),
+            (r'\bstate\b', 'state'),
+            (r'\bregion\b', 'region'),
+            (r'\bfather(?:[\'’]s)?\s+name\b|\bdad(?:dy)?(?:[\'’]s)?\s+name\b', 'father_name'),
+            (r'\bmother(?:[\'’]s)?\s+name\b|\bmom(?:my)?(?:[\'’]s)?\s+name\b', 'mother_name'),
+            (r'\bblood\s+group\b', 'blood_group'),
+            (r'\b(?:date\s+of\s+birth|dob|birth\s+date)\b', 'dob'),
+            (r'\bage\b', 'age'),
         ):
             if re.search(pattern, natural_query, re.I):
                 requested.add(column)
         if requested:
+            requested.update({'usn', 'name'})
             return [{k: v for k, v in row.items() if k in requested} for row in rows]
     return rows
+
+
+def _apply_dynamic_student_fields(rows: list[dict]) -> list[dict]:
+    """Replace persisted semester metadata with the current value derived from each USN."""
+    from graduation_manager import parse_usn_full
+
+    enriched = []
+    for row in rows:
+        updated = dict(row)
+        updated.pop('estimated_semester', None)
+        usn = updated.get('usn')
+        calculated = parse_usn_full(usn) if usn else None
+        if not calculated:
+            enriched.append(updated)
+            continue
+        for key in (
+            'student_type', 'admission_batch', 'current_year', 'current_sem',
+            'graduation_year', 'graduation_status',
+        ):
+            if key in updated or key == 'current_sem':
+                updated[key] = calculated[key]
+        enriched.append(updated)
+    return enriched
+
 
 
 # ── Multi-student ambiguity detection ─────────────────────────────────────────
@@ -718,9 +905,9 @@ def _build_full_profile_row(usn: str) -> list[dict]:
             if key not in profile or profile.get(key) is None:
                 profile[key] = usn_data.get(key)
     if academic:
-        return [{**profile, **row} for row in academic]
+        return _apply_dynamic_student_fields([{**profile, **row} for row in academic])
     # Personal-only student (no marks yet)
-    return [profile] if profile else []
+    return _apply_dynamic_student_fields([profile]) if profile else []
 
 
 def _check_ambiguity(data: list[dict], nq: str) -> dict | None:
@@ -730,6 +917,9 @@ def _check_ambiguity(data: list[dict], nq: str) -> dict | None:
     Returns None if no ambiguity (single student or genuinely different query).
     """
     if not data:
+        return None
+
+    if re.search(r'\brural\b|\burban\b|\b(?:students?|student records?)\b.*\b(?:from|in|at|near)\b', nq, re.I):
         return None
 
     # Collect unique USNs in result
@@ -744,11 +934,12 @@ def _check_ambiguity(data: list[dict], nq: str) -> dict | None:
 
     # If the query is a bulk-type query (all students, top N, etc.) → no ambiguity
     bulk_patterns = re.compile(
-        r'\b(all|every|list|top\s+\d+|show\s+all|display\s+all|compare|semester\s+\d)\b',
+        r'\b(all|every|list|top\s+\d+|show\s+all|display\s+all|compare|semester\s+\d|girls?|female|cgpa|how\s+many|count|village)\b',
         re.IGNORECASE
     )
     if bulk_patterns.search(nq):
         return None
+
 
     # Build suggestion cards for each unique USN
     suggestions = []
@@ -811,7 +1002,7 @@ def _enrich_with_profile(data: list[dict], nq: str, intent: str) -> list[dict]:
                     profile[key] = usn_data.get(key)
 
     # For full/personal/complete_profile intent with single student: merge profile into every row
-    return [{**profile, **row} for row in data]
+    return _apply_dynamic_student_fields([{**profile, **row} for row in data])
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -846,7 +1037,10 @@ def suggest_students(q: str, current_user: dict = Depends(get_current_user)):
     return suggestions
 
 
+
+
 @router.post("/generate")
+
 def generate_query(request: QueryRequest, current_user: dict = Depends(get_current_user)):
     start = time.time()
     nq = request.natural_query.strip()
@@ -905,6 +1099,15 @@ def generate_query(request: QueryRequest, current_user: dict = Depends(get_curre
     cached_sql, cached_result = _get_cache(nq)
     if cached_sql and cached_result is not None:
         if cached_sql.strip().upper().startswith("SELECT"):
+            cached_result = _filter_by_intent(cached_result, intent, nq)
+            cached_result = _apply_dynamic_student_fields(cached_result)
+            is_scalar = (
+                intent == 'scalar_number' or
+                (len(cached_result) == 1 and len(cached_result[0]) == 1 and
+                 (isinstance(list(cached_result[0].values())[0], (int, float)) or
+                  re.search(r'\bhow\s+many\b|\bcount\b', nq, re.I)))
+            )
+            scalar_val = list(cached_result[0].values())[0] if (is_scalar and cached_result) else None
             return {
                 "action_required": "none",
                 "query": cached_sql,
@@ -912,14 +1115,23 @@ def generate_query(request: QueryRequest, current_user: dict = Depends(get_curre
                 "execution_time": round(time.time() - start, 4),
                 "cached": True,
                 "intent": intent,
+                "is_scalar_number": is_scalar,
+                "scalar_value": scalar_val,
             }
+
 
     if partial_update:
         result = {"success": True, "query_dict": partial_update}
     else:
         result = generate_sql_query(nq, current_user["role"])
     if not result["success"]:
-        raise HTTPException(500, result["error_msg"])
+        error_message = str(result.get("error_msg", ""))
+        if error_message.startswith("ERROR:"):
+            raise HTTPException(
+                503,
+                "AI service temporarily unavailable. This query could not be safely resolved locally.",
+            )
+        raise HTTPException(400, "Could not generate a safe database query.")
 
     query_dict = _enforce_specific_select(nq, result["query_dict"])
     if not (query_dict.get('operation') == 'update' and query_dict.get('executions')):
@@ -955,9 +1167,27 @@ def generate_query(request: QueryRequest, current_user: dict = Depends(get_curre
         data = _run_query(query_dict)
         elapsed = time.time() - start
         _log_history(current_user["role"], nq, query_dict["sql"], elapsed)
+        write_audit_log(
+            action="AI_QUERY",
+            username=current_user["username"],
+            role=current_user["role"],
+            summary=f"Query: '{original_query[:100]}'",
+            success=True
+        )
 
         # ── 0 results → fuzzy fallback ────────────────────────────────────────
         if len(data) == 0:
+            if intent in {'location_search', 'rural_search', 'urban_search'}:
+                return {
+                    "action_required": "none",
+                    "query": query_dict["sql"],
+                    "data": [],
+                    "execution_time": round(elapsed, 4),
+                    "cached": False,
+                    "intent": intent,
+                    "no_match_message": "No students matched the requested address filters.",
+                }
+
             suggestion = smart_fallback(nq)
             stype = suggestion.get('type', 'no_match')
 
@@ -997,6 +1227,10 @@ def generate_query(request: QueryRequest, current_user: dict = Depends(get_curre
                 "intent": intent,
             }
 
+        # Keep calculated academic metadata current for every student query,
+        # including bulk results that read persisted current_sem values.
+        data = _apply_dynamic_student_fields(data)
+
         # ── Multi-student ambiguity check (SQL returned > 1 student) ─────────
         ambiguity = _check_ambiguity(data, nq)
         if ambiguity:
@@ -1014,7 +1248,7 @@ def generate_query(request: QueryRequest, current_user: dict = Depends(get_curre
         data = _enrich_with_profile(data, nq, intent)
 
         # ── Intent-based column filtering ─────────────────────────────────────
-        data = _filter_by_intent(data, intent)
+        data = _filter_by_intent(data, intent, nq)
 
         # ── Complete-profile fallback: if SQL returned nothing, try profile builder ──
         if intent == 'complete_profile' and not data:
@@ -1026,6 +1260,19 @@ def generate_query(request: QueryRequest, current_user: dict = Depends(get_curre
                 if len(candidates) == 1:
                     data = _build_full_profile_row(candidates[0]['usn'])
 
+        is_scalar = (
+            intent == 'scalar_number' or
+            (len(data) == 1 and len(data[0]) == 1 and
+             (isinstance(list(data[0].values())[0], (int, float)) or
+              re.search(r'\bhow\s+many\b|\bcount\b', nq, re.I)))
+        )
+        scalar_val = list(data[0].values())[0] if (is_scalar and data and len(data) == 1) else None
+
+
+        # Check girls names response
+        if len(data) > 0 and list(data[0].keys()) == ['name'] and re.search(r'\bgirls?\b|\bfemale\b', nq, re.I):
+            intent = 'girls_names'
+
         _set_cache(nq, query_dict["sql"], data)
         return {
             "action_required": "none",
@@ -1035,7 +1282,10 @@ def generate_query(request: QueryRequest, current_user: dict = Depends(get_curre
             "cached": False,
             "intent": intent,
             "response_language": response_language,
+            "is_scalar_number": is_scalar,
+            "scalar_value": scalar_val,
         }
+
 
     except Exception as e:
         elapsed = time.time() - start
@@ -1077,7 +1327,11 @@ def execute_confirmed(request: ExecuteRequest, current_user: dict = Depends(get_
 
     op  = request.query_dict.get("operation", "").lower()
     sql = request.query_dict.get("sql", "")
-    if not (op == 'update' and request.query_dict.get('executions')):
+    if op == 'update' and request.query_dict.get('executions'):
+        update_error = _validate_structured_update(request.query_dict)
+        if update_error:
+            raise HTTPException(400, update_error)
+    else:
         validation = validate_sql_query(request.query_dict, current_user["role"])
         if not validation["is_valid"]:
             raise HTTPException(403, "Invalid student data.")
@@ -1466,6 +1720,15 @@ def get_student_profile_api(usn: str, current_user: dict = Depends(get_current_u
             raise HTTPException(404, "Student not found.")
 
         actual_usn = personal_row.get('usn', usn)
+        write_audit_log(
+            action="PROFILE_VIEWED",
+            username=current_user["username"],
+            role=current_user["role"],
+            target_table="students",
+            target_id=actual_usn,
+            summary=f"Opened profile for student: {personal_row.get('name', actual_usn)} ({actual_usn})",
+            success=True
+        )
 
         # Academic data — all semesters with cumulative CGPA
         cur.execute(

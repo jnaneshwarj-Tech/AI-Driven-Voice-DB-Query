@@ -139,6 +139,8 @@ SYNONYM_REGISTRY: dict[str, list[str]] = {
         "date_of_birth_dob", "d_o_b",
     ],
 
+    "age": ["age", "student_age"],
+
     "year_of_joining": [
         "year_of_joining", "joining_year", "admission_year",
         "year_of_admission", "batch_year", "batch", "year_joined",
@@ -165,6 +167,24 @@ SYNONYM_REGISTRY: dict[str, list[str]] = {
     "address": [
         "address", "student_address", "residential_address",
     ],
+    "village": [
+        "village", "native_village", "village_name", "hamlet",
+    ],
+    "taluk": [
+        "taluk", "taluka", "tehsil", "sub_district", "subdistrict", "taluk_name", "tahsil", "mandal",
+    ],
+    "district": [
+        "district", "district_name", "dist", "district_code",
+    ],
+    "state": [
+        "state", "state_name", "province", "country_state", "state_name_1",
+    ],
+    "region": [
+        "region", "region_type", "region_category", "region_rural_urban",
+        "area_type", "residence_type", "location_type",
+        "rural_urban", "urban_rural", "rural_or_urban", "student_region",
+    ],
+
     "permanent_address": [
         "permanent_address", "home_address", "native_address",
     ],
@@ -325,6 +345,14 @@ _WIDE_D = re.compile(
     r'^sem[_\s]*(\d+)[_\s]*(?P<m>cgpa|sgpa|gpa)$',
     re.IGNORECASE,
 )
+_WIDE_E = re.compile(
+    r'^(\d+)(?:st|nd|rd|th)?[_\s]*sem(?:ester)?$',
+    re.IGNORECASE,
+)
+_WIDE_F = re.compile(
+    r'^sem(?:ester)?[_\s]*(\d+)$',
+    re.IGNORECASE,
+)
 
 
 def parse_wide_sem_col(norm: str):
@@ -338,6 +366,12 @@ def parse_wide_sem_col(norm: str):
             metric = 'sgpa' if metric_raw in ('sgpa', 'gpa') else 'cgpa'
             if num:
                 return int(num), metric
+    for pat in (_WIDE_E, _WIDE_F):
+        m = pat.match(norm)
+        if m:
+            num = m.group(1)
+            if num and num.isdigit():
+                return int(num), 'sgpa'
     return None
 
 
@@ -385,6 +419,9 @@ def map_column(raw: str) -> tuple[str, str, float, list[dict]]:
     mapping_type: exact|synonym|wide_sem|context|fuzzy|passthrough|ambiguous
     """
     norm = normalize_header(raw)
+
+    if re.search(r'(^|_)(region|rural_urban|urban_rural|area_type|residence_type|location_type)(_|$)', norm):
+        return 'region', 'context', 0.95, []
 
     # 1. Wide-format semester pattern (before synonym so sgpa_sem3 ≠ semester)
     wide = parse_wide_sem_col(norm)

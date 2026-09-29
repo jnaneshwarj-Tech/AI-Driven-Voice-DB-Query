@@ -5,13 +5,13 @@ class Settings(BaseSettings):
     MYSQL_HOST: str = "localhost"
     MYSQL_PORT: int = 3306
     MYSQL_USER: str = "root"
-    MYSQL_PASSWORD: str = "Manoj@123"
+    MYSQL_PASSWORD: str = ""
     MYSQL_DB: str = "student_db"
 
-    SECRET_KEY: str = "supersecretkey_change_in_prod"
+    SECRET_KEY: str = ""
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-3.6-flash"
-    GEMINI_FALLBACK_MODEL: str = "gemini-3.5-flash"
+    GEMINI_FALLBACK_MODEL: str = "gemini-3.1-flash-lite"
 
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 1000
@@ -47,7 +47,11 @@ class Settings(BaseSettings):
     UNDO_WINDOW_MINUTES_BULK: int = 30
     UNDO_RETENTION_DAYS: int = 30
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=[os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), ".env"],
+        env_file_encoding="utf-8",
+        extra="ignore"
+    )
 
     @property
     def JWT_SECRET_KEY(self) -> str:

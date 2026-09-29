@@ -168,6 +168,19 @@ def create_indexes():
             _add_col_if_missing(cur, "students", "mother_name",       "VARCHAR(150)")
             _add_col_if_missing(cur, "students", "blood_group",       "VARCHAR(5)")
             _add_col_if_missing(cur, "students", "address",           "TEXT")
+            _add_col_if_missing(cur, "students", "region",            "VARCHAR(20)")
+
+            # Cleanup extraneous phone columns if created by previous uploads
+            for junk_col in ("phone_9328569647", "phone_this_9904562818"):
+                try:
+                    cur.execute(f"SHOW COLUMNS FROM `students` LIKE '{junk_col}'")
+                    if cur.fetchone():
+                        cur.execute(f"ALTER TABLE `students` DROP COLUMN `{junk_col}`")
+                        print(f"  Cleaned up column: students.{junk_col}")
+                    cur.execute("DELETE FROM schema_metadata WHERE column_name = %s", (junk_col,))
+                except Exception as e:
+                    print(f"  [WARN] Failed to drop {junk_col}: {e}")
+
             _add_col_if_missing(cur, "students", "gender",            "VARCHAR(10)")
             _add_col_if_missing(cur, "students", "religion",          "VARCHAR(50)")
             _add_col_if_missing(cur, "students", "caste",             "VARCHAR(100)")

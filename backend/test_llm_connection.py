@@ -19,11 +19,11 @@ def test_llm():
     result = llm_service.generate_query(test_prompt)
     
     if result.startswith("ERROR"):
-        print("❌ TEST FAILED")
+        print("[FAILED] TEST FAILED")
         print(result)
         return False
     else:
-        print("✅ TEST PASSED")
+        print("[PASSED] TEST PASSED")
         print(f"Response: {result}")
         return True
 

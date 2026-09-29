@@ -102,9 +102,29 @@ def _build_export_model(data: list[dict], user: dict) -> dict:
     for entry in data:
         cleaned_data.append({k: v for k, v in entry.items() if k not in _PHOTO_KEYS})
 
-    # The dashboard payload is the executed SELECT result. Keep its exact
-    # columns so exports cannot widen a narrow query into a student profile.
+    # Extract personal details for the student
     student_details: dict = {}
+    from fuzzy_search import get_student_profile
+
+    # Find the primary USN or student name from export payload
+    target_usn = None
+    for entry in cleaned_data:
+        if entry.get("usn"):
+            target_usn = entry.get("usn")
+            break
+
+    if target_usn:
+        profile = get_student_profile(target_usn)
+        if profile:
+            student_details = {k: v for k, v in profile.items() if k not in _PHOTO_KEYS}
+
+    # If no USN match from DB, collect all personal fields present in the first row
+    if not student_details and cleaned_data:
+        first_row = cleaned_data[0]
+        for key in _PERSONAL_KEYS:
+            if key in first_row and first_row[key] is not None:
+                student_details[key] = first_row[key]
+
     academic_rows = cleaned_data
 
     # ── Semester-wise cumulative CGPA per student ─────────────────────────────
@@ -330,7 +350,7 @@ def _build_branded_pdf(path: str, model: dict):
 
 
 def _log_export(fmt: str, record_count: int, username: str):
-    from database import db_conn
+    from database import db_conn, write_audit_log
     try:
         with db_conn() as conn:
             cur = conn.cursor()
@@ -340,6 +360,12 @@ def _log_export(fmt: str, record_count: int, username: str):
             )
             conn.commit()
             cur.close()
+        write_audit_log(
+            action=f"EXPORT_{fmt.upper()}",
+            username=username,
+            summary=f"Exported {record_count} record(s) as {fmt.upper()}",
+            success=True,
+        )
     except Exception as e:
         print(f"[ERR] Failed to log export: {e}")
 

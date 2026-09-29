@@ -122,17 +122,9 @@ def parse_usn_full(usn: str) -> Optional[Dict[str, Any]]:
     current_year = max(1, min(degree, current_year))
     
     # Determine graduation status dynamically (never store this)
-    if current_calendar_year >= graduation_year:
-        # Additional check: if it's before July of graduation year, still active
-        if current_calendar_year == graduation_year and current_month < 7:
-            graduation_status = "ACTIVE"
-            is_graduated = False
-        else:
-            graduation_status = "GRADUATED"
-            is_graduated = True
-    else:
-        graduation_status = "ACTIVE"
-        is_graduated = False
+    # Graduation status changes at the start of the calculated graduation year.
+    graduation_status = "GRADUATED" if current_calendar_year >= graduation_year else "ACTIVE"
+    is_graduated = graduation_status == "GRADUATED"
     
     return {
         "degree": degree,

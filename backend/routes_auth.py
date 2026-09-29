@@ -146,7 +146,7 @@ def register(req: RegisterRequest):
         if cur.fetchone():
             cur.close()
             raise HTTPException(400, "An account with this email already exists.")
-        role = "Staff" if req.role not in ["Admin", "Staff"] else req.role
+        role = "Staff"
         cur.execute(
             "INSERT INTO users (username, email, password_hash, role) VALUES (%s, %s, %s, %s)",
             (req.username, email_normalized, get_password_hash(req.password), role)

@@ -35,6 +35,7 @@ STUDENT_COLS = [
     'gender', 'religion', 'caste', 'sub_caste', 'category',
     'permanent_address', 'current_address', 'phone', 'email',
     'aadhar_no', 'year_and_branch', 'source_file', 'branch', 'division', 'domain',
+    'region',
 ]
 
 _COL_MAX = {
@@ -43,7 +44,9 @@ _COL_MAX = {
     'caste': 100, 'sub_caste': 100, 'category': 20,
     'phone': 20, 'aadhar_no': 20, 'year_and_branch': 100,
     'source_file': 255, 'branch': 50, 'division': 50, 'domain': 100,
+    'region': 20,
 }
+
 
 _USN_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9\-/]{0,98}[A-Za-z0-9]$|^[A-Za-z0-9]{2,100}$')
 
@@ -64,12 +67,27 @@ def _clean_str(val, max_len=None):
     if max_len: s = s[:max_len]
     return s
 
+
+def _clean_region(val):
+    value = _clean_str(val, _COL_MAX.get('region'))
+    if not value:
+        return None
+    normalized = re.sub(r'[^a-z]+', ' ', value.lower()).strip()
+    if re.search(r'\burban\b', normalized):
+        return 'URBAN'
+    if re.search(r'\brural\b', normalized):
+        return 'RURAL'
+    return value.upper()
+
 def _clean_date(val):
     if _is_empty(val): return None
     s = str(val).strip()
     try:
         import pandas as pd
-        return pd.to_datetime(s).strftime('%Y-%m-%d')
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            return pd.to_datetime(s, dayfirst=True).strftime('%Y-%m-%d')
     except Exception: return None
 
 def _valid_usn(usn: str) -> bool:
@@ -123,10 +141,13 @@ def _student_payload(row: dict, name: str | None = None) -> dict:
             payload[col] = _safe_int(row.get('current_sem')) or _safe_int(row.get('semester'))
         elif col == 'year_of_joining':
             payload[col] = _safe_int(row.get('year_of_joining')) or _safe_int(row.get('admission_year'))
+        elif col == 'region':
+            payload[col] = _clean_region(row.get(col))
         else:
             payload[col] = _clean_str(row.get(col), _COL_MAX.get(col))
     payload['source_file'] = payload.get('source_file')  # may be set by caller
     return payload
+
 
 
 def _upsert_student(cur, usn: str, row: dict) -> str:
@@ -145,6 +166,8 @@ def _upsert_student(cur, usn: str, row: dict) -> str:
                 v = row.get(col)
                 if v is not None and not isinstance(v, int):
                     v = _safe_int(v)
+            elif col == 'region':
+                v = _clean_region(row.get(col))
             else:
                 v = _clean_str(row.get(col), _COL_MAX.get(col))
             if v is None:
@@ -187,6 +210,8 @@ def _upsert_student(cur, usn: str, row: dict) -> str:
                 v = row.get(col)
                 if v is not None and not isinstance(v, int):
                     v = _safe_int(v)
+            elif col == 'region':
+                v = _clean_region(row.get(col))
             else:
                 v = _clean_str(row.get(col), _COL_MAX.get(col))
             if v is not None:
@@ -233,8 +258,8 @@ def _upsert_mark(cur, usn: str, semester: int, sgpa) -> str:
 @router.post("/upload")
 async def upload_file(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
     """Step 1: Store file in cache. Does NOT write to DB yet."""
-    if current_user["role"] != "Staff":
-        raise HTTPException(403, "Only Staff can upload files.")
+    if current_user.get("role", "").lower() not in ("staff", "admin"):
+        raise HTTPException(403, "Only Staff and Admin can upload files.")
     content = await file.read()
     if not content:
         raise HTTPException(400, "Empty file.")
@@ -268,8 +293,8 @@ def update_database(filename: str, current_user: dict = Depends(get_current_user
     Source of truth for counting = mapped_records (one per parsed file row).
     Marks come from extract_marks_from_row on each valid row.
     """
-    if current_user["role"] != "Staff":
-        raise HTTPException(403, "Only Staff can update the database.")
+    if current_user.get("role", "").lower() not in ("staff", "admin"):
+        raise HTTPException(403, "Only Staff and Admin can update the database.")
 
     content = _get_upload_cache(filename)
     if content is None:
@@ -337,14 +362,19 @@ def update_database(filename: str, current_user: dict = Depends(get_current_user
 
         if idx in invalid_by_index:
             iv = invalid_by_index[idx]
-            classified.append({
-                'row_index': idx, 'usn': iv.get('usn') or raw_usn, 'name': iv.get('name') or raw_name,
-                'status': 'INVALID',
-                'reason': '; '.join(iv['errors']),
-                'problematic_fields': iv.get('problematic_fields', []),
-                'row': row,
-            })
-            continue
+            student_fatal = bool(iv.get('problematic_fields')) or any(
+                'required field' in e.lower() or 'is invalid' in e.lower() for e in iv.get('errors', [])
+                if 'sgpa' not in e.lower() and 'semester' not in e.lower()
+            )
+            if student_fatal or not (raw_usn and _valid_usn(raw_usn)):
+                classified.append({
+                    'row_index': idx, 'usn': iv.get('usn') or raw_usn, 'name': iv.get('name') or raw_name,
+                    'status': 'INVALID',
+                    'reason': '; '.join(iv['errors']),
+                    'problematic_fields': iv.get('problematic_fields', []),
+                    'row': row,
+                })
+                continue
 
         if raw_usn and _valid_usn(raw_usn):
             usn = raw_usn
@@ -717,8 +747,8 @@ def get_gpa_data(current_user: dict = Depends(get_current_user)):
 
 @router.delete("/delete/{filename}")
 def delete_file(filename: str, current_user: dict = Depends(get_current_user)):
-    if current_user["role"] != "Staff":
-        raise HTTPException(403, "Only Staff can delete files.")
+    if current_user.get("role", "").lower() not in ("staff", "admin"):
+        raise HTTPException(403, "Only Staff and Admin can delete files.")
     with db_conn() as conn:
         cur = conn.cursor()
         cur.execute("DELETE FROM uploaded_files WHERE filename=%s", (filename,))

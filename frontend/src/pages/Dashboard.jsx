@@ -24,7 +24,7 @@ import {
   Download, FileText, Table as TableIcon,
   CheckCircle, BarChart2, ShieldAlert, Printer, Search, User, GraduationCap,
   PlusCircle, Trash2, Clock, ChevronRight, RotateCcw, Activity,
-  Zap, RefreshCw, Moon, Sun, Bell, HardDrive, Languages
+  Zap, RefreshCw, Moon, Sun, Bell, HardDrive, Languages, MapPin
 } from 'lucide-react';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -135,6 +135,7 @@ function GenericTable({ data, responseLanguage = 'english' }) {
   if (!data?.length) return null;
   const flatRows = data.map(r => flattenDoc(r));
   let headers = [...new Set(flatRows.flatMap(r => Object.keys(r)))].filter(h =>
+    h !== 'estimated_semester' &&
     flatRows.some(r => r[h] !== null && r[h] !== undefined && r[h] !== '—' && r[h] !== '')
   );
 
@@ -929,9 +930,26 @@ export default function Dashboard() {
   const showGeneric = !showCombined && !showGpa && data.length > 0;
   const showChart   = data.length > 0 && shouldShowChart(results?._query || '');
 
-  // Sprint 2: Track response language for Kannada label support
-  const responseLanguage = results?.response_language || 'english';
+  // Scalar number check (e.g. "How many students have 8+ CGPA?")
+  const isScalarNumber = Boolean(
+    results?.is_scalar_number ||
+    results?.intent === 'count' ||
+    (data.length === 1 && Object.keys(data[0]).length === 1 && typeof Object.values(data[0])[0] === 'number')
+  );
+  const scalarValue = results?.scalar_value ?? (data.length === 1 ? Object.values(data[0])[0] : null);
 
+
+  // Girls names list check (e.g. "Give only girls names")
+  const isGirlsNamesList = Boolean(
+    results?.intent === 'girls_names' ||
+    (data.length > 0 &&
+      Object.keys(data[0]).length === 1 &&
+      Object.keys(data[0])[0].toLowerCase() === 'name' &&
+      /\b(girls?|female|women)\b/i.test(q))
+  );
+
+  // Track response language for Kannada label support
+  const responseLanguage = results?.response_language || 'english';
 
   return (
     <div className="flex h-screen bg-slate-50 overflow-hidden">
@@ -1377,6 +1395,24 @@ export default function Dashboard() {
                                     <HighlightMatch text={s.name || ''} query={liveSearchTerm} />
                                   </p>
                                   <p className="text-[11px] text-slate-400 font-mono">{s.usn}</p>
+                                  {s.suggested_phrases?.length > 1 && (
+                                    <div className="flex flex-wrap gap-1 mt-1">
+                                      {s.suggested_phrases.slice(1, 4).map((phrase, pIdx) => (
+                                        <span
+                                          key={pIdx}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setQuery(phrase);
+                                            setShowLiveDropdown(false);
+                                            handleQuerySubmit();
+                                          }}
+                                          className="text-[10px] bg-slate-100 hover:bg-blue-100 text-slate-600 hover:text-blue-700 px-1.5 py-0.5 rounded border border-slate-200 cursor-pointer transition-colors"
+                                        >
+                                          {phrase}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  )}
                                 </div>
                               </div>
 
@@ -1449,14 +1485,14 @@ export default function Dashboard() {
                         </div>
                         <div>
                           <h3 className="text-sm font-bold text-slate-800">
-                            {data.length > 0 ? `${data.length} record(s)` : 'Operation Complete'}
+                            {isScalarNumber ? 'Result' : isGirlsNamesList ? 'Female Students' : (data.length > 0 ? `${data.length} record(s)` : 'Operation Complete')}
                           </h3>
                           {results.execution_time != null && (
                             <p className="text-xs text-slate-400">{(results.execution_time * 1000).toFixed(1)}ms{results.cached ? ' · from cache' : ''}</p>
                           )}
                         </div>
                       </div>
-                      {data.length > 0 && (
+                      {data.length > 0 && !isScalarNumber && (
                         <div className="flex items-center gap-1.5 flex-wrap">
                           {/* Intent badge */}
                           {results?.intent && results.intent !== 'full' && (
@@ -1497,18 +1533,45 @@ export default function Dashboard() {
                       )}
                     </div>
 
-                    {results.query && (
+                    {results.query && !isScalarNumber && (
                       <div className="bg-slate-900 px-5 py-2 border-b border-slate-800">
                         <p className="text-xs font-mono text-green-400 break-all">{results.query}</p>
                       </div>
                     )}
 
                     <div className="p-5 space-y-4">
-                      {showCombined && <CombinedStudentView data={data} responseLanguage={responseLanguage} />}
-                      {showGpa && <GpaTable data={data} />}
-                      {showGeneric && <GenericTable data={data} responseLanguage={selectedLanguage} />}
-                      {showChart && <ResultChart data={data} query={results._query} />}
-                      {data.length === 0 && !suggestion && (
+                      {isScalarNumber ? (
+                        <div className="flex flex-col items-center justify-center py-16 px-4 bg-white">
+                          <span className="text-8xl font-black text-slate-900 tracking-tight select-all">
+                            {scalarValue}
+                          </span>
+                        </div>
+                      ) : isGirlsNamesList ? (
+                        <div className="max-w-md mx-auto bg-white rounded-2xl border border-slate-200 p-6 shadow-sm my-4">
+                          <div className="text-xs font-bold text-slate-500 uppercase tracking-wider pb-3 border-b border-slate-100 flex items-center justify-between mb-2">
+                            <span className="flex items-center gap-1.5"><User className="w-4 h-4 text-pink-500" /> Female Student Names</span>
+                            <span className="bg-pink-50 text-pink-700 border border-pink-200 px-2.5 py-0.5 rounded-full text-xs font-semibold">
+                              {data.length} students
+                            </span>
+                          </div>
+                          <div className="divide-y divide-slate-100 max-h-[500px] overflow-y-auto pr-1">
+                            {data.map((r, i) => (
+                              <div key={i} className="py-2.5 px-3 flex items-center gap-3 hover:bg-slate-50 rounded-lg transition-colors font-medium text-slate-800 text-sm">
+                                <span className="w-6 text-xs text-slate-400 font-mono">{i + 1}.</span>
+                                <span className="font-semibold">{r.name}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          {showCombined && <CombinedStudentView data={data} responseLanguage={responseLanguage} />}
+                          {showGpa && <GpaTable data={data} />}
+                          {showGeneric && <GenericTable data={data} responseLanguage={selectedLanguage} />}
+                          {showChart && <ResultChart data={data} query={results._query} />}
+                        </>
+                      )}
+                      {data.length === 0 && !suggestion && !isScalarNumber && (
                         <div className="flex items-center justify-center py-8 text-slate-400 text-sm">
                           {results.message || 'No records found.'}
                         </div>

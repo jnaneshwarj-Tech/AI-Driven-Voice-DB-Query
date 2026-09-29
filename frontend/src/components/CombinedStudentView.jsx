@@ -5,6 +5,7 @@ import {
   GraduationCap, BookOpen, Shield, AlertCircle, ChevronRight
 } from 'lucide-react';
 
+
 // ── Field category classification ─────────────────────────────────────────────
 // These are the "always academic" keys — never shown in personal section
 const ACADEMIC_KEYS = new Set([
@@ -27,6 +28,7 @@ const FIELD_ICONS = {
   address: <MapPin className="w-3.5 h-3.5 text-slate-400" />,
   permanent_address: <MapPin className="w-3.5 h-3.5 text-slate-400" />,
   current_address: <MapPin className="w-3.5 h-3.5 text-slate-400" />,
+  region: <MapPin className="w-3.5 h-3.5 text-slate-400" />,
   dob: <Calendar className="w-3.5 h-3.5 text-slate-400" />,
   blood_group: <Droplet className="w-3.5 h-3.5 text-red-400" />,
 };
@@ -70,11 +72,13 @@ function prettyValue(key, val) {
 // Determine section grouping for a personal field
 function getFieldGroup(key) {
   const k = key.toLowerCase();
+  // Strictly filter out any extraneous phone columns
+  if (k.startsWith('phone_') || k.startsWith('mobile_') || k.includes('phone_this')) return 'ignored';
   if (['father_name', 'mother_name', 'guardian_name', 'parent_name', 'religion', 'caste', 'sub_caste', 'category'].includes(k)) return 'family';
   if (['dob', 'gender', 'blood_group', 'aadhar_no', 'status', 'nationality'].includes(k)) return 'identity';
-  if (['phone', 'mobile', 'email', 'emergency_contact_number', 'emergency_contact', 'emergency_phone'].includes(k) || k.includes('contact') || k.includes('phone') || k.includes('mobile')) return 'contact';
-  if (k.includes('address')) return 'address';
-  if (['branch', 'division', 'section', 'domain', 'year_and_branch', 'year_of_joining', 'admission_year', 'current_year', 'current_sem', 'student_type', 'estimated_semester', 'source_file'].includes(k)) return 'academic_meta';
+  if (['phone', 'mobile', 'email'].includes(k)) return 'contact';
+  if (['address', 'permanent_address', 'current_address', 'region'].includes(k)) return 'address';
+  if (['branch', 'division', 'section', 'domain', 'year_and_branch', 'year_of_joining', 'admission_year', 'current_year', 'current_sem', 'student_type', 'source_file'].includes(k)) return 'academic_meta';
   return 'other';
 }
 
@@ -116,6 +120,8 @@ function Section({ title, icon, children, empty }) {
   );
 }
 
+
+
 // ── Main Component ────────────────────────────────────────────────────────────
 export default function CombinedStudentView({ data, responseLanguage }) {
   if (!data?.length) return null;
@@ -132,11 +138,13 @@ export default function CombinedStudentView({ data, responseLanguage }) {
         if (IDENTITY_KEYS.has(k.toLowerCase())) continue;
         if (isAcademicKey(k)) continue;
         const group = getFieldGroup(k);
+        if (group === 'ignored') continue;
         if (group === 'academic_meta') {
           academicMeta[k] = v;
         } else {
           personal[k] = v;
         }
+
       }
       students[key] = {
         usn: row.usn,
@@ -149,7 +157,7 @@ export default function CombinedStudentView({ data, responseLanguage }) {
           student_type: row.student_type,
           admission_batch: row.admission_batch ?? row.admission_year,
           current_year: row.current_year,
-          current_sem: row.current_sem ?? row.estimated_semester,
+          current_sem: row.current_sem,
         },
         academic: [],
       };
@@ -190,6 +198,7 @@ export default function CombinedStudentView({ data, responseLanguage }) {
         const grouped = { family: {}, identity: {}, contact: {}, address: {}, other: {} };
         for (const [k, v] of Object.entries(student.personal)) {
           const g = getFieldGroup(k);
+          if (g === 'ignored' || g === 'academic_meta') continue;
           if (grouped[g]) grouped[g][k] = v;
           else grouped.other[k] = v;
         }
@@ -242,10 +251,10 @@ export default function CombinedStudentView({ data, responseLanguage }) {
                       Section: <span className="font-semibold">{student.academicMeta.division || student.academicMeta.section}</span>
                     </div>
                   )}
-                  {(student.academicMeta.current_sem || student.academicMeta.estimated_semester) && (
+                  {student.academicMeta.current_sem && (
                     <div className="flex items-center gap-1.5 text-xs text-slate-600 bg-white px-3 py-1.5 rounded-lg border border-slate-200">
                       <BookOpen className="w-3.5 h-3.5 text-indigo-500" />
-                      Sem: <span className="font-semibold">{student.academicMeta.current_sem || student.academicMeta.estimated_semester}</span>
+                      Sem: <span className="font-semibold">{student.academicMeta.current_sem}</span>
                     </div>
                   )}
                   {(student.academicMeta.admission_year || student.academicMeta.year_of_joining) && (
@@ -296,14 +305,19 @@ export default function CombinedStudentView({ data, responseLanguage }) {
                     </Section>
                   )}
 
-                  {/* Contact Details */}
-                  {Object.keys(grouped.contact).length > 0 && (
-                    <Section title={LABELS.contact} icon={<Phone className="w-3 h-3" />}>
-                      {Object.entries(grouped.contact).map(([k, v]) => (
-                        <InfoRow key={k} label={prettyLabel(k)} value={prettyValue(k, v)} icon={FIELD_ICONS[k] || <Phone className="w-3.5 h-3.5 text-slate-400" />} />
-                      ))}
-                    </Section>
-                  )}
+                  {/* Contact Details: Strictly Phone and Email */}
+                  <Section title={LABELS.contact} icon={<Phone className="w-3 h-3" />}>
+                    <InfoRow
+                      label="Phone:"
+                      value={student.personal.phone || student.personal.mobile || '—'}
+                      icon={<Phone className="w-3.5 h-3.5 text-slate-400" />}
+                    />
+                    <InfoRow
+                      label="Email:"
+                      value={student.personal.email || '—'}
+                      icon={<Mail className="w-3.5 h-3.5 text-slate-400" />}
+                    />
+                  </Section>
 
                   {/* Address */}
                   {Object.keys(grouped.address).length > 0 && (

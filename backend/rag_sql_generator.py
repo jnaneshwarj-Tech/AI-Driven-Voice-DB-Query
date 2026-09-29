@@ -62,6 +62,11 @@ students:
    - sub_caste (VARCHAR(100))
    - category (VARCHAR(20))
    - address (TEXT)
+   - village (VARCHAR(100))
+   - taluk (VARCHAR(100))
+   - district (VARCHAR(100))
+   - state (VARCHAR(100))
+    - region (VARCHAR(20)) - Rural or Urban classification from uploaded data
    - permanent_address (TEXT)
    - current_address (TEXT)
    - phone (VARCHAR(20))
@@ -189,10 +194,13 @@ Q: show marks / gpa of all students
 SQL: SELECT s.usn, s.name, m.semester, m.sgpa, ROUND(AVG(m.sgpa) OVER (PARTITION BY m.usn ORDER BY m.semester ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),2) AS cgpa FROM students s JOIN marks m ON m.usn = s.usn ORDER BY s.usn ASC, m.semester ASC;
 
 Q: show details of Manoj
-SQL: SELECT s.usn, s.name, s.father_name, s.mother_name, s.dob, s.blood_group, s.address FROM students s WHERE s.name LIKE '%Manoj%';
+SQL: SELECT s.usn, s.name, s.father_name, s.mother_name, s.dob, s.blood_group, s.address, s.village, s.district, s.state FROM students s WHERE s.name LIKE '%Manoj%';
+
+Q: give village, district and state of Manoj
+SQL: SELECT s.village, s.district, s.state FROM students s WHERE s.name LIKE '%Manoj%';
 
 Q: show details of USN 4HG23CS032
-SQL: SELECT s.usn, s.name, s.father_name, s.dob, s.address FROM students s WHERE s.usn = '4HG23CS032';
+SQL: SELECT s.usn, s.name, s.father_name, s.dob, s.address, s.village, s.district, s.state FROM students s WHERE s.usn = '4HG23CS032';
 
 Q: manoj j r father name
 SQL: SELECT s.usn, s.name, s.father_name, s.mother_name, s.dob, s.blood_group, s.phone, s.email FROM students s WHERE s.name LIKE '%Manoj%';
@@ -260,7 +268,17 @@ SQL: DELETE FROM students WHERE usn = '4HG23CS099';
 Q: update name of USN 4HG23CS001 to Ravi Shankar
 SQL: UPDATE students SET name = 'Ravi Shankar' WHERE usn = '4HG23CS001';
 
+Q: Give only girls names
+SQL: SELECT s.name FROM students s WHERE UPPER(s.gender) = 'FEMALE' ORDER BY s.name ASC;
+
+Q: How many students have 8+ CGPA?
+SQL: SELECT COUNT(*) AS total_students FROM (SELECT s.usn FROM students s JOIN marks m ON m.usn = s.usn GROUP BY s.usn HAVING AVG(m.sgpa) >= 8.0) AS sub;
+
+Q: Belur
+SQL: SELECT DISTINCT s.village, s.taluk, s.district, s.state FROM students s WHERE LOWER(s.village) = 'belur' OR LOWER(s.address) LIKE '%belur%';
+
 USER QUERY: {query}
+
 
 SQL:"""
 
@@ -323,6 +341,206 @@ def _fix_window_order(sql: str) -> str:
     return wrapped
 
 
+_RURAL_ADDRESS_PATTERN = r"(^|[^a-z0-9])(village|gram|panchayat|taluk|taluka|tehsil|mandal|rural)([^a-z0-9]|$)"
+_URBAN_ADDRESS_PATTERN = r"(^|[^a-z0-9])(urban|city|town|municipal|municipality|corporation|ward|layout|nagar|colony)([^a-z0-9]|$)"
+
+
+def _address_query(effective_query: str):
+    eq = effective_query.strip().lower()
+    region_match = re.search(r"\b(rural|urban)\b", eq)
+    region_pattern = None
+    if region_match:
+        region_pattern = _RURAL_ADDRESS_PATTERN if region_match.group(1) == "rural" else _URBAN_ADDRESS_PATTERN
+
+    location_match = re.search(r"\b(?:from|in|at|near)\s+([a-z][a-z .'-]*?)(?:[?.!,;]|$)", eq)
+    location = location_match.group(1).strip() if location_match else None
+    if location:
+        location = re.sub(r"\s+(?:district|taluk|taluka|village|city|town)$", "", location).strip()
+        if location in {"rural area", "rural areas", "urban area", "urban areas"}:
+            location = None
+
+    if not region_pattern and not location:
+        return None
+
+    conditions = []
+    params = []
+    if region_pattern:
+        conditions.append("LOWER(COALESCE(s.address, '')) REGEXP %s")
+        params.append(region_pattern)
+    if location:
+        conditions.append("LOWER(COALESCE(s.address, '')) LIKE %s")
+        params.append(f"%{location}%")
+
+    count_query = bool(re.search(r"\b(?:how\s+many|count|number\s+of)\b", eq))
+    columns = "COUNT(*) AS total_students" if count_query else "s.usn, s.name, s.address"
+    sql = (
+        f"SELECT {columns} FROM students s WHERE {' AND '.join(conditions)} "
+        + ("" if count_query else "ORDER BY s.usn ASC")
+    )
+    return sql, params
+
+
+def _student_lookup_query(effective_query: str):
+    eq = effective_query.strip()
+    lower_query = eq.lower()
+    field_patterns = (
+        ("father_name", r"(?:father(?:'s)?|dad(?:'s)?)\s+name"),
+        ("mother_name", r"(?:mother(?:'s)?|mom(?:'s)?)\s+name"),
+        ("phone", r"(?:phone(?:\s+number)?|mobile(?:\s+number)?)"),
+        ("email", r"email(?:\s+address)?"),
+        ("address", r"address"),
+        ("blood_group", r"blood\s+group"),
+        ("dob", r"(?:date\s+of\s+birth|dob|birth\s+date)"),
+        ("age", r"age"),
+    )
+    field_match = None
+    selected_field = None
+    for column, pattern in field_patterns:
+        match = re.search(r"(?:['’]s\s+|\s+)" + pattern + r"\b", lower_query)
+        if match:
+            field_match = match
+            selected_field = column
+            break
+
+    usn_match = re.search(r"\b(?=[a-z0-9]*\d)[a-z0-9]{6,}\b", lower_query)
+    target = eq[:field_match.start()] if field_match else eq
+    if not field_match and not usn_match and not re.search(
+        r"\b(?:find|search|show|get|display|look\s+up|details|information|profile)\b", lower_query
+    ):
+        return None
+
+    target = re.sub(
+        r"^\s*(?:(?:what\s+is|find|search(?:\s+for)?|show|get|display|look\s+up|give(?:\s+me)?)\s+)+",
+        "",
+        target,
+        flags=re.I,
+    )
+    target = re.sub(
+        r"^\s*(?:(?:all|complete|full|personal|academic|student)\s+)*(?:details|information|profile)\s+(?:of|for|about)\s+",
+        "",
+        target,
+        flags=re.I,
+    )
+    target = re.sub(r"\s+(?:(?:personal|complete|full|academic)\s+)?(?:details|information|profile)\s*$", "", target, flags=re.I)
+    target = re.sub(r"(?:['’]s|s')\s*$", "", target).strip(" \t\r\n?.!,;:")
+
+    if usn_match:
+        identity_sql = "UPPER(s.usn) = %s"
+        identity_value = usn_match.group(0).upper()
+    elif target:
+        identity_sql = "LOWER(TRIM(s.name)) = LOWER(%s)"
+        identity_value = target
+    else:
+        return None
+
+    if selected_field == "age":
+        field_sql = "TIMESTAMPDIFF(YEAR, s.dob, CURDATE()) AS age"
+    elif selected_field:
+        field_sql = f"s.`{selected_field}`"
+    else:
+        field_sql = "s.*"
+    columns = f"s.usn, s.name, {field_sql}" if selected_field else field_sql
+    return (
+        f"SELECT {columns} FROM students s WHERE {identity_sql} ORDER BY s.usn ASC",
+        [identity_value],
+    )
+
+
+def _rule_based_fallback_sql(effective_query: str) -> str | None:
+    """Generate deterministic SQL for standard queries when LLM is unavailable or for fast-path queries."""
+    eq = effective_query.strip().lower()
+
+    address_query = _address_query(effective_query)
+    if address_query:
+        return address_query
+
+    if re.search(r"\b(?:how\s+many|count|number\s+of)\b.*\bstudents?\b", eq):
+        return "SELECT COUNT(*) AS total_students FROM students"
+
+    if re.search(r'\b(show|list|display|get)?\s*all\s+students\b', eq):
+        return "SELECT s.usn, s.name, s.current_sem, s.email, s.phone, s.status FROM students s ORDER BY s.usn ASC"
+
+    student_query = _student_lookup_query(effective_query)
+    if student_query:
+        return student_query
+
+    # 0a. Girls names: "Give only girls names" / "show female students names"
+    if re.search(r'\b(?:give|show|list|get|display)?\s*only\s*(?:girls?|female|women)\s*names?\b|\b(?:girls?|female|women)\s*names?\s*only\b|\b(?:give|show|list|get|display)?\s*(?:girls?|female)\s*names?\b', eq):
+        return "SELECT s.name FROM students s WHERE UPPER(s.gender) = 'FEMALE' ORDER BY s.name ASC"
+
+    # 0b. 8+ CGPA count: "How many students have 8+ CGPA?"
+    if re.search(r'\bhow\s+many\s+students\b.*\b(?:8\+|8\.0\+|>=?\s*8|greater\s+than\s+(?:or\s+equal\s+to\s+)?8)\s*cgpa\b|\bhow\s+many\s+students\b.*\bcgpa\b.*(?:8\+|8\.0|\b8\b)|\bcount\b.*\b(?:8\+|8\.0)\s*cgpa\b', eq):
+        return "SELECT COUNT(*) AS total_students FROM (SELECT s.usn FROM students s JOIN marks m ON m.usn = s.usn GROUP BY s.usn HAVING AVG(m.sgpa) >= 8.0) AS sub"
+
+    # 2. Semester-specific top N: rank by SGPA within the requested semester.
+    top_match = re.search(r'\btop\s+(\d+)\s+students\b', eq)
+    if top_match:
+        n = top_match.group(1)
+        until_match = re.search(
+            r'\b(?:till|until|upto|through)\s+'
+            r'(?:semester\s+|sem\s+)?(\d+)\s*(?:st|nd|rd|th)?\s*(?:semester|sem)?\b'
+            r'|\bup\s+to\s+(?:semester\s+|sem\s+)?(\d+)\s*'
+            r'(?:st|nd|rd|th)?\s*(?:semester|sem)?\b',
+            eq,
+            re.I,
+        )
+        if until_match:
+            semester = int(next(group for group in until_match.groups() if group))
+            return (
+                f"SELECT s.usn, s.name, "
+                f"ROUND(AVG(m.sgpa),2) AS cgpa, {semester} AS through_semester "
+                f"FROM students s JOIN marks m ON s.usn=m.usn "
+                f"WHERE m.semester BETWEEN 1 AND {semester} "
+                f"GROUP BY s.usn, s.name "
+                f"HAVING COUNT(DISTINCT m.semester) >= {semester} "
+                f"ORDER BY cgpa DESC, s.usn ASC LIMIT {n}"
+            )
+
+        semester_match = re.search(
+            r'\b(?:semester|sem)\s*(?:number\s*)?(\d+)\b'
+            r'|\b(\d+)(?:st|nd|rd|th)\s+(?:semester|sem)\b'
+            r'|\b(\d+)\s*(?:st|nd|rd|th)?\s+sem\b',
+            eq,
+            re.I,
+        )
+        if semester_match:
+            semester = next(group for group in semester_match.groups() if group)
+            return (
+                f"SELECT s.usn, s.name, m.semester, m.sgpa "
+                f"FROM students s JOIN marks m ON s.usn=m.usn "
+                f"WHERE m.semester = {int(semester)} "
+                f"ORDER BY m.sgpa DESC, s.usn ASC LIMIT {n}"
+            )
+
+        # General top N: rank each student by overall CGPA across all semesters.
+        return f"SELECT s.usn, s.name, ROUND(AVG(m.sgpa),2) AS cgpa FROM students s JOIN marks m ON s.usn=m.usn GROUP BY s.usn, s.name ORDER BY cgpa DESC LIMIT {n}"
+
+    # 3. Student specific queries: "<Name> personal details"
+    pers_match = re.search(r'(?:show|give|display)?\s*([a-zA-Z0-9]+)\s+personal\s+details\b', eq)
+    if pers_match:
+        name = pers_match.group(1)
+        return f"SELECT s.usn, s.name, s.father_name, s.mother_name, s.dob, s.gender, s.blood_group, s.address, s.phone, s.email, s.aadhar_no FROM students s WHERE s.name LIKE '%{name}%'"
+
+    # 4. Student specific queries: "<Name> academic details"
+    acad_match = re.search(r'(?:show|give|display)?\s*([a-zA-Z0-9]+)\s+academic\s+details\b', eq)
+    if acad_match:
+        name = acad_match.group(1)
+        return f"SELECT s.usn, s.name, m.semester, m.sgpa, ROUND(AVG(m.sgpa) OVER (PARTITION BY m.usn ORDER BY m.semester ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),2) AS cgpa FROM students s JOIN marks m ON m.usn = s.usn WHERE s.name LIKE '%{name}%' ORDER BY m.semester ASC"
+
+    # 5. Student specific queries: "<Name> details" / "give <Name> full details" / "show <Name> information"
+    if re.search(r'\b(?:details|information|profile)\b', eq):
+        name_clean = re.sub(r'\b(show|give|display|get|full|complete|all|details|information|profile|of|about|for)\b', ' ', eq, flags=re.I).strip()
+        if name_clean and len(name_clean) >= 2:
+            return f"SELECT s.*, m.semester, m.sgpa, ROUND(AVG(m.sgpa) OVER (PARTITION BY m.usn ORDER BY m.semester ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),2) AS cgpa FROM students s LEFT JOIN marks m ON m.usn = s.usn WHERE s.name LIKE '%{name_clean}%' OR s.usn = '{name_clean.upper()}' ORDER BY m.semester ASC"
+
+
+    # 6. Single name search: "Karthik"
+    if re.fullmatch(r'[a-zA-Z0-9]{2,}', eq):
+        return f"SELECT s.*, m.semester, m.sgpa, ROUND(AVG(m.sgpa) OVER (PARTITION BY m.usn ORDER BY m.semester ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),2) AS cgpa FROM students s LEFT JOIN marks m ON m.usn = s.usn WHERE s.name LIKE '%{eq}%' OR s.usn = '{eq.upper()}' ORDER BY m.semester ASC"
+
+    return None
+
+
 def generate_sql_query(natural_query: str, user_role: str, retry_count: int = 0) -> dict:
     schema = _load_schema_context()
 
@@ -333,23 +551,42 @@ def generate_sql_query(natural_query: str, user_role: str, retry_count: int = 0)
     # Use normalized query for SQL generation
     effective_query = normalized_query if normalized_query != natural_query else natural_query
 
+    # Try rule-based matching first for deterministic and high-confidence queries
+    fallback_query = _rule_based_fallback_sql(effective_query)
+    if fallback_query:
+        fallback_sql, fallback_params = fallback_query if isinstance(fallback_query, tuple) else (fallback_query, [])
+        return {
+            "success": True,
+            "sql": fallback_sql,
+            "raw": fallback_sql,
+            "query_dict": {"operation": "select", "sql": fallback_sql, "params": fallback_params},
+            "response_language": lang if 'lang' in locals() else 'english',
+        }
+
+
     # Prepend language context to prompt if non-English
     schema_with_context = lang_context + schema if lang_context else schema
     prompt = _SYSTEM_PROMPT.format(schema=schema_with_context, query=effective_query, role=user_role)
     raw = llm_service.generate_query(prompt).strip()
 
     if raw.startswith("ERROR:"):
-        return {"success": False, "error_msg": raw, "sql": None}
+        if fallback_sql:
+            raw = fallback_sql
+        else:
+            return {"success": False, "error_msg": raw, "sql": None}
 
     sql = _strip_markdown(raw)
 
     if not _is_safe_dml(sql):
-        if retry_count < 2:
+        if fallback_sql:
+            sql = fallback_sql
+        elif retry_count < 2:
             return generate_sql_query(
                 natural_query + " (Output ONLY a valid SQL — SELECT, INSERT, UPDATE, or DELETE.)",
                 user_role, retry_count + 1
             )
-        return {"success": False, "error_msg": "Could not generate a valid SQL query.", "sql": None}
+        else:
+            return {"success": False, "error_msg": "Could not generate a valid SQL query.", "sql": None}
 
     op = re.match(r'^\s*(\w+)', sql.upper()).group(1).lower()
 

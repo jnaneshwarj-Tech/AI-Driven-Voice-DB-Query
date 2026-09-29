@@ -12,6 +12,7 @@
   "dependencies": {
     "@google-cloud/translate": "^10.0.1",
     "axios": "^1.6.7",
+    "caniuse-lite": "^1.0.30001810",
     "fast-levenshtein": "^3.0.0",
     "fuse.js": "^7.3.0",
     "lucide-react": "^0.330.0",
@@ -25,7 +26,7 @@
     "@types/react": "^18.2.55",
     "@types/react-dom": "^18.2.19",
     "@vitejs/plugin-react": "^4.2.1",
-    "autoprefixer": "^10.4.17",
+    "autoprefixer": "^10.5.5",
     "eslint": "^8.56.0",
     "eslint-plugin-react": "^7.33.2",
     "eslint-plugin-react-hooks": "^4.6.0",
