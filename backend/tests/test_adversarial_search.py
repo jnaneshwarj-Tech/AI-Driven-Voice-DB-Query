@@ -150,14 +150,26 @@ class VariantInvarianceTests(unittest.TestCase):
     # An unusual word order the deterministic layer cannot yet map must degrade
     # to a clean clarification (400), never the misleading 403 "Invalid student
     # data." nor fabricated rows — a genuine, non-technical-user-safe behaviour.
+    # Word orders the deterministic layer cannot map must degrade to a clean
+    # clarification (400) — never the misleading 403 "Invalid student data."
+    # A phrasing it *can* map to the closest valid interpretation is allowed to
+    # answer, but then it must return exactly the authoritative set: an answer
+    # built from a look-alike word is the defect, an answer that is provably the
+    # right one is not.
     def test_unmappable_occupation_phrasing_clarifies_not_errors(self):
+        truth = sorted(r["usn"] for r in run_expected(
+            "SELECT usn FROM students WHERE LOWER(COALESCE(father_occupation,'')) LIKE '%farmer%'"))
         for v in ["farmer family students", "list farmer father students"]:
             act, resp = app_usns(v)
-            self.assertEqual(act, [], f"{v!r} returned fabricated rows")
             code = resp.get("_http_error")
             if code is not None:
                 self.assertEqual(code, 400, f"{v!r} raised {code}, expected 400 clarification")
                 self.assertNotIn("Invalid student data", str(resp.get("_detail", "")))
+            else:
+                self.assertEqual(
+                    act, truth,
+                    f"{v!r} answered with a set that is not the farmer truth: "
+                    f"extra={sorted(set(act) - set(truth))} missing={sorted(set(truth) - set(act))}")
 
 
 class FalsePositiveGuardTests(unittest.TestCase):

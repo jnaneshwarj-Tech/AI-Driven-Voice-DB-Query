@@ -85,11 +85,18 @@ class DistanceAndBacklogTests(unittest.TestCase):
             self.assertTrue(1 <= int(row["semester"]) <= 8,
                             f"semester out of range for {row['usn']}")
         # Where a backlog row has a stored semester, the display must equal it.
-        stored = {r["usn"]: r["semester"] for r in exp if r["semester"] is not None}
+        # A student can hold several backlogs in different semesters, so the
+        # comparison is per (student, semester) pair, not one value per student.
+        stored = {}
+        for r in exp:
+            if r["semester"] is not None:
+                stored.setdefault((r["usn"], r["subject"]), set()).add(int(r["semester"]))
         for row in rows:
-            if row["usn"] in stored:
-                self.assertEqual(int(row["semester"]), int(stored[row["usn"]]),
-                                 f"stored semester overridden for {row['usn']}")
+            key = (row["usn"], row.get("subject"))
+            if key in stored:
+                self.assertEqual(
+                    int(row["semester"]), int(next(iter(stored[key]))),
+                    f"stored semester overridden for {key}")
         # The whole point of the fix: the listing spans multiple semesters,
         # not a single one.
         sems = {int(r["semester"]) for r in rows}

@@ -230,11 +230,14 @@ def _resolve_trash_path(path: str) -> str:
 
 
 def _purge_expired_trash(cur):
+    """Hard-delete Trash entries older than 30 days. Returns those filenames so
+    the caller can retire exactly the student data that file introduced."""
     cur.execute(
         "SELECT filename, trash_path FROM uploaded_files "
         "WHERE trashed_at < DATE_SUB(NOW(), INTERVAL 30 DAY)"
     )
     expired_files = cur.fetchall()
+    purged = []
     for file_row in expired_files:
         try:
             if file_row.get("trash_path"):
@@ -248,6 +251,9 @@ def _purge_expired_trash(cur):
             "AND trashed_at < DATE_SUB(NOW(), INTERVAL 30 DAY)",
             (file_row["filename"],),
         )
+        if cur.rowcount:
+            purged.append(file_row["filename"])
+    return purged
 
 
 def _reconcile_trashed_file_records(cur):
@@ -306,28 +312,53 @@ def _reconcile_trashed_file_records(cur):
     return changed
 
 
-def _reconcile_orphaned_source_records(cur):
-    """Remove legacy file-imported students whose source file was hard-deleted."""
+def _reconcile_orphaned_source_records(cur, filenames, actor: str = "system", conn=None):
+    """Remove students introduced *only* by files that have just been purged
+    from Trash. `filenames` must be the concrete purged files: a student whose
+    source file is merely unrecognised (script-seeded, restored from a backup,
+    or imported before upload tracking existed) is still real college data and
+    must never be deleted by a guess."""
+    filenames = sorted({f for f in (filenames or []) if f and f.strip()})
+    if not filenames:
+        return False
+
+    placeholders = ",".join(["%s"] * len(filenames))
     cur.execute(
-        "SELECT s.usn FROM students s "
-        "WHERE s.source_file IS NOT NULL AND TRIM(s.source_file)<>'' "
-        "AND NOT EXISTS (SELECT 1 FROM uploaded_files f WHERE f.filename=s.source_file) "
-        "AND NOT EXISTS (SELECT 1 FROM student_field_sources p "
-        "WHERE p.usn=s.usn AND p.is_active=1)"
+        f"SELECT s.usn FROM students s "
+        f"WHERE s.source_file IN ({placeholders}) "
+        f"AND NOT EXISTS (SELECT 1 FROM student_field_sources p "
+        f"WHERE p.usn=s.usn AND p.is_active=1)",
+        filenames,
     )
     orphaned_usns = [row["usn"] for row in cur.fetchall()]
+    if not orphaned_usns:
+        return False
+
+    from routes_undo import create_undo_snapshot
+    create_undo_snapshot("DELETE", orphaned_usns, actor,
+                         f"Purged {len(orphaned_usns)} student(s) of trashed file(s)",
+                         conn=conn)
     for usn in orphaned_usns:
         cur.execute("DELETE FROM marks WHERE usn=%s", (usn,))
         cur.execute("DELETE FROM students WHERE usn=%s", (usn,))
-    return bool(orphaned_usns)
+    write_audit_log("FILE_DATA_PURGE", actor, "", "students",
+                    ",".join(orphaned_usns[:20]),
+                    f"Removed {len(orphaned_usns)} student(s) from purged file(s): "
+                    f"{', '.join(filenames[:5])}")
+    return True
 
 
 def reconcile_trashed_file_data():
-    """Apply any pending legacy Trash cleanup before student data is read."""
+    """Apply pending Trash cleanup for files the college explicitly trashed.
+
+    Never called from a read endpoint: browsing students or analytics must not
+    mutate student records.
+    """
     with db_conn() as conn:
         cur = conn.cursor(dictionary=True)
         changed = _reconcile_trashed_file_records(cur)
-        changed = _reconcile_orphaned_source_records(cur) or changed
+        purged = _purge_expired_trash(cur)
+        changed = _reconcile_orphaned_source_records(cur, purged, "system", conn) or changed
         if changed:
             _clear_cache(conn)
         conn.commit()
@@ -804,7 +835,9 @@ async def upload_file(file: UploadFile = File(...), current_user: dict = Depends
     with db_conn() as conn:
         cur = conn.cursor(dictionary=True)
         reconciled = _reconcile_trashed_file_records(cur)
-        _purge_expired_trash(cur)
+        purged = _purge_expired_trash(cur)
+        reconciled = _reconcile_orphaned_source_records(
+            cur, purged, current_user["username"], conn) or reconciled
         if reconciled:
             _clear_cache(conn)
         cur.execute("SELECT trashed_at FROM uploaded_files WHERE filename=%s", (file.filename,))
@@ -1350,8 +1383,9 @@ def list_trashed_files(current_user: dict = Depends(require_roles("Admin"))):
     with db_conn() as conn:
         cur = conn.cursor(dictionary=True)
         data_reconciled = _reconcile_trashed_file_records(cur)
-        data_reconciled = _reconcile_orphaned_source_records(cur) or data_reconciled
-        _purge_expired_trash(cur)
+        purged = _purge_expired_trash(cur)
+        data_reconciled = _reconcile_orphaned_source_records(
+            cur, purged, current_user["username"], conn) or data_reconciled
         if data_reconciled:
             _clear_cache(conn)
         cur.execute(

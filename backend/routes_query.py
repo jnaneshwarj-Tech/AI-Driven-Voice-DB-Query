@@ -3725,9 +3725,6 @@ def suggest_students(q: str, current_user: dict = Depends(get_current_user)):
 @router.post("/generate")
 
 def generate_query(request: QueryRequest, current_user: dict = Depends(get_current_user)):
-    from routes_files import reconcile_trashed_file_data
-    reconcile_trashed_file_data()
-
     start = time.time()
     debug_enabled = bool(
         request.debug
@@ -4635,8 +4632,6 @@ def get_history(limit: int = 10, current_user: dict = Depends(get_current_user))
 
 @router.get("/analytics")
 def get_analytics(current_user: dict = Depends(get_current_user)):
-    from routes_files import reconcile_trashed_file_data
-    reconcile_trashed_file_data()
     from graduation_manager import get_graduation_analytics
     
     with db_conn() as conn:

@@ -70,9 +70,13 @@ class StaffPhrasingQueryTests(unittest.TestCase):
 
     # ── fee status: unpaid ────────────────────────────────────────────────────
     def test_who_not_paid_fees(self):
+        # DB truth: a student "has not paid" when at least one fee row records no
+        # payment at all. "Partially Paid" is a distinct question (own test), and
+        # blank / not-applicable statuses mean nothing is owed.
         exp = _expected(
             "SELECT DISTINCT usn FROM student_fees "
-            "WHERE LOWER(TRIM(COALESCE(status,''))) IN ('no','not paid')")
+            "WHERE LOWER(TRIM(COALESCE(status,''))) IN "
+            "('no','not paid','unpaid','pending','due','balance','0')")
         exp_usns = sorted(r["usn"] for r in exp)
         act = _app_usns("who not paid fees")
         self.assertEqual(act, exp_usns, "unpaid fee set mismatch")

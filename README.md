@@ -294,6 +294,34 @@ npm run dev
 - Backend API: `http://localhost:8000`
 - Swagger Docs: `http://localhost:8000/docs`
 
+### 4. Test suite (isolated staging database)
+
+Tests write and delete rows. They run against a **staging database**, never the
+live `student_db`.
+
+```bash
+cd backend
+export MYSQL_PWD=your_mysql_password
+MYSQL="/c/Program Files/MySQL/MySQL Server 8.0/bin/mysql"
+
+# one-off: copy the live *structure* (no data) into the staging schema
+"$MYSQL" -uroot -e "DROP DATABASE IF EXISTS student_db_staging;
+                   CREATE DATABASE student_db_staging CHARACTER SET utf8mb4"
+"/c/Program Files/MySQL/MySQL Server 8.0/bin/mysqldump" -uroot --no-data student_db > qa/staging_structure.sql
+"$MYSQL" -uroot student_db_staging < qa/staging_structure.sql
+
+# deterministic synthetic students (safe to re-run; staging only)
+MYSQL_DB=student_db_staging ./.venv/Scripts/python.exe -m qa.seed_staging
+
+# every test run
+MYSQL_DB=student_db_staging PYTHONIOENCODING=utf-8 \
+  ./.venv/Scripts/python.exe -m unittest discover -s tests -p "test_*.py"
+```
+
+The staging account is `qa_admin` / `qa_admin` (Admin), `qa_staff` / `qa_staff`
+(Staff). Test QA artifacts — the staging seed, the master test manifest and the
+backup-restore verifier — live in `backend/qa/`.
+
 ## Default Login Credentials
 - Admin: `admin` / `admin123`
 - Staff: `staff` / `staff123`
