@@ -168,7 +168,18 @@ def create_indexes():
             _add_col_if_missing(cur, "students", "mother_name",       "VARCHAR(150)")
             _add_col_if_missing(cur, "students", "blood_group",       "VARCHAR(5)")
             _add_col_if_missing(cur, "students", "address",           "TEXT")
-            _add_col_if_missing(cur, "students", "region",            "VARCHAR(20)")
+            _add_col_if_missing(cur, "students", "region",            "VARCHAR(100)")
+            # Widen region if it is the old VARCHAR(20)
+            try:
+                cur.execute("SELECT CHARACTER_MAXIMUM_LENGTH FROM information_schema.COLUMNS "
+                            "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='students' AND COLUMN_NAME='region'")
+                row = cur.fetchone()
+                col_len = row[0] if row else 100
+                if col_len is not None and int(col_len) < 100:
+                    cur.execute("ALTER TABLE `students` MODIFY COLUMN `region` VARCHAR(100)")
+                    print("  Migrated: students.region VARCHAR(20) -> VARCHAR(100)")
+            except Exception as _widen_err:
+                print(f"  [WARN] region widen: {_widen_err}")
 
             # Cleanup extraneous phone columns if created by previous uploads
             for junk_col in ("phone_9328569647", "phone_this_9904562818"):
@@ -200,6 +211,17 @@ def create_indexes():
             _add_col_if_missing(cur, "students", "branch",            "VARCHAR(50)")
             _add_col_if_missing(cur, "students", "division",          "VARCHAR(50)")
             _add_col_if_missing(cur, "students", "domain",            "VARCHAR(100)")
+            # Marks students whose USN was auto-generated because the source file
+            # carried no USN; staff must later swap in the real college USN.
+            _add_col_if_missing(cur, "students", "usn_provisional",   "TINYINT(1) NOT NULL DEFAULT 0")
+            # ── New enrichment columns ──────────────────────────────────────────
+            _add_col_if_missing(cur, "students", "village",               "VARCHAR(100)")
+            _add_col_if_missing(cur, "students", "area_type",             "VARCHAR(20)")
+            _add_col_if_missing(cur, "students", "area",                  "VARCHAR(100)")
+            _add_col_if_missing(cur, "students", "emergency_contact_number", "VARCHAR(20)")
+            _add_col_if_missing(cur, "students", "taluk",                 "VARCHAR(100)")
+            _add_col_if_missing(cur, "students", "district",              "VARCHAR(100)")
+            _add_col_if_missing(cur, "students", "state",                 "VARCHAR(100)")
 
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS marks (
@@ -229,9 +251,17 @@ def create_indexes():
                     row_count INT DEFAULT 0,
                     students_saved INT DEFAULT 0,
                     marks_saved INT DEFAULT 0,
-                    gpa_rows INT DEFAULT 0
+                    gpa_rows INT DEFAULT 0,
+                    trashed_at DATETIME NULL,
+                    trash_path VARCHAR(512) NULL,
+                    trash_undo_token VARCHAR(36) NULL,
+                    data_reconciled_at DATETIME NULL
                 )
             """)
+            _add_col_if_missing(cur, "uploaded_files", "trashed_at", "DATETIME NULL")
+            _add_col_if_missing(cur, "uploaded_files", "trash_path", "VARCHAR(512) NULL")
+            _add_col_if_missing(cur, "uploaded_files", "trash_undo_token", "VARCHAR(36) NULL")
+            _add_col_if_missing(cur, "uploaded_files", "data_reconciled_at", "DATETIME NULL")
 
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS schema_metadata (
@@ -409,6 +439,43 @@ def create_indexes():
             """)
 
             # ── Sprint 1: Upload version / snapshot history ───────────────────────
+            # ── Provenance / Source tracking table ─────────────────────────────
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS student_field_sources (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    usn VARCHAR(100) NOT NULL,
+                    field_name VARCHAR(100) NOT NULL,
+                    field_value TEXT,
+                    source_filename VARCHAR(255) NOT NULL,
+                    import_id INT DEFAULT NULL,
+                    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    is_active TINYINT(1) DEFAULT 1,
+                    UNIQUE KEY uq_sfs_usn_field_src (usn, field_name, source_filename),
+                    INDEX idx_sfs_usn (usn),
+                    INDEX idx_sfs_field (field_name),
+                    INDEX idx_sfs_source (source_filename),
+                    INDEX idx_sfs_active (is_active)
+                )
+            """)
+
+            # ── File-delete provenance snapshot (for undo of FILE_DELETE) ─────
+            # Stores every provenance row deactivated during a file deletion so
+            # undo can restore is_active=1 and re-populate the student columns.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS file_delete_provenance_snapshots (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    undo_token VARCHAR(100) NOT NULL,
+                    source_filename VARCHAR(255) NOT NULL,
+                    usn VARCHAR(100) NOT NULL,
+                    field_name VARCHAR(100) NOT NULL,
+                    field_value TEXT,
+                    import_id INT DEFAULT NULL,
+                    INDEX idx_fdps_token (undo_token),
+                    INDEX idx_fdps_filename (source_filename),
+                    INDEX idx_fdps_usn (usn)
+                )
+            """)
+
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS upload_versions (
                     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -474,6 +541,14 @@ def create_indexes():
                 ('students','email','VARCHAR(255)',0,0),
                 ('students','aadhar_no','VARCHAR(20)',0,0),
                 ('students','year_and_branch','VARCHAR(100)',0,0),
+                ('students','region','VARCHAR(100)',0,0),
+                ('students','village','VARCHAR(100)',0,0),
+                ('students','area_type','VARCHAR(20)',0,0),
+                ('students','area','VARCHAR(100)',0,0),
+                ('students','emergency_contact_number','VARCHAR(20)',0,0),
+                ('students','taluk','VARCHAR(100)',0,0),
+                ('students','district','VARCHAR(100)',0,0),
+                ('students','state','VARCHAR(100)',0,0),
                 ('marks','id','INT',1,0),
                 ('marks','usn','VARCHAR(100)',0,1),
                 ('marks','semester','INT',0,0),
@@ -484,6 +559,144 @@ def create_indexes():
                 "INSERT IGNORE INTO schema_metadata "
                 "(table_name,column_name,data_type,is_primary_key,is_foreign_key) VALUES (%s,%s,%s,%s,%s)",
                 seed
+            )
+
+            # ── Student Lifecycle Management (discontinuation / dropout /
+            #    readmission / rejoining / VTU-aligned academic lifecycle).
+            #    Fully additive: existing student, marks, fee and backlog rows
+            #    are never modified or deleted by these tables. Events are an
+            #    append-only audit trail; current status is a derived cache.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS student_lifecycle_status (
+                    usn VARCHAR(100) NOT NULL PRIMARY KEY,
+                    current_status VARCHAR(30) NOT NULL DEFAULT 'Active',
+                    effective_date DATE NULL,
+                    last_enrolled_semester INT NULL,
+                    last_enrolled_academic_year VARCHAR(20) NULL,
+                    scheme VARCHAR(40) NULL,
+                    reason VARCHAR(500) NULL,
+                    document_ref VARCHAR(500) NULL,
+                    updated_by VARCHAR(100) NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        ON UPDATE CURRENT_TIMESTAMP,
+                    INDEX idx_ls_status (current_status),
+                    INDEX idx_ls_scheme (scheme)
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS student_lifecycle_events (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    usn VARCHAR(100) NOT NULL,
+                    event_type VARCHAR(40) NOT NULL,
+                    from_status VARCHAR(30) NULL,
+                    to_status VARCHAR(30) NOT NULL,
+                    effective_date DATE NULL,
+                    last_enrolled_semester INT NULL,
+                    last_enrolled_academic_year VARCHAR(20) NULL,
+                    requested_semester INT NULL,
+                    approved_semester INT NULL,
+                    request_date DATE NULL,
+                    approval_date DATE NULL,
+                    rejoin_date DATE NULL,
+                    scheme VARCHAR(40) NULL,
+                    academic_year VARCHAR(20) NULL,
+                    reason VARCHAR(500) NULL,
+                    document_ref VARCHAR(500) NULL,
+                    approval_ref VARCHAR(200) NULL,
+                    remarks TEXT NULL,
+                    eligibility_flags JSON NULL,
+                    actor_username VARCHAR(100) NULL,
+                    actor_role VARCHAR(20) NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_le_usn (usn),
+                    INDEX idx_le_to_status (to_status),
+                    INDEX idx_le_created (created_at)
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS readmission_requests (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    usn VARCHAR(100) NOT NULL,
+                    requested_semester INT NULL,
+                    request_date DATE NULL,
+                    scheme VARCHAR(40) NULL,
+                    eligibility_outcome VARCHAR(60) NULL,
+                    eligibility_flags JSON NULL,
+                    status VARCHAR(30) NOT NULL DEFAULT 'Requested',
+                    approved_semester INT NULL,
+                    approval_date DATE NULL,
+                    approval_ref VARCHAR(200) NULL,
+                    rejoin_date DATE NULL,
+                    decided_by VARCHAR(100) NULL,
+                    remarks TEXT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        ON UPDATE CURRENT_TIMESTAMP,
+                    INDEX idx_rr_usn (usn),
+                    INDEX idx_rr_status (status)
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS vtu_scheme_rules (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    scheme_code VARCHAR(40) NOT NULL,
+                    admission_category VARCHAR(30) NOT NULL DEFAULT '',
+                    rule_key VARCHAR(80) NOT NULL,
+                    rule_value VARCHAR(255) NULL,
+                    source_url VARCHAR(500) NULL,
+                    clause_ref VARCHAR(255) NULL,
+                    effective_date DATE NULL,
+                    verification_status VARCHAR(30) NOT NULL DEFAULT 'pending',
+                    applies_from_batch INT NULL,
+                    applies_to_batch INT NULL,
+                    notes TEXT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        ON UPDATE CURRENT_TIMESTAMP,
+                    UNIQUE KEY uq_rule (scheme_code, admission_category, rule_key),
+                    INDEX idx_rule_scheme (scheme_code),
+                    INDEX idx_rule_verify (verification_status)
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS student_identity_links (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    usn VARCHAR(100) NOT NULL,
+                    related_usn VARCHAR(100) NOT NULL,
+                    relation_type VARCHAR(40) NOT NULL,
+                    note VARCHAR(500) NULL,
+                    created_by VARCHAR(100) NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE KEY uq_link (usn, related_usn, relation_type),
+                    INDEX idx_link_usn (usn),
+                    INDEX idx_link_related (related_usn)
+                )
+            """)
+            # Denormalised current-status cache on students (kept in sync by the
+            # lifecycle workflow). events table remains the authoritative history.
+            _add_col_if_missing(cur, 'students', 'lifecycle_status',
+                                "VARCHAR(30) NOT NULL DEFAULT 'Active'")
+            # Structured reason category + supporting detail for lifecycle events
+            # (spec §2). reason holds the free-text explanation; reason_category
+            # holds a controlled classification used for filters/counts.
+            _add_col_if_missing(cur, 'student_lifecycle_events', 'reason_category',
+                                "VARCHAR(40) NULL")
+            _add_col_if_missing(cur, 'student_lifecycle_status', 'reason_category',
+                                "VARCHAR(40) NULL")
+            _add_index_if_missing(cur, 'student_lifecycle_events', 'idx_le_effective', 'effective_date')
+            _add_index_if_missing(cur, 'student_lifecycle_status', 'idx_ls_effective', 'effective_date')
+            cur.executemany(
+                "INSERT IGNORE INTO schema_metadata "
+                "(table_name,column_name,data_type,is_primary_key,is_foreign_key) VALUES (%s,%s,%s,%s,%s)",
+                [
+                    ('students', 'lifecycle_status', 'VARCHAR(30)', 0, 0),
+                    ('student_lifecycle_status', 'usn', 'VARCHAR(100)', 1, 1),
+                    ('student_lifecycle_events', 'usn', 'VARCHAR(100)', 0, 1),
+                    ('student_lifecycle_events', 'reason_category', 'VARCHAR(40)', 0, 0),
+                    ('student_lifecycle_status', 'reason_category', 'VARCHAR(40)', 0, 0),
+                    ('readmission_requests', 'usn', 'VARCHAR(100)', 0, 1),
+                ]
             )
 
             conn.commit()

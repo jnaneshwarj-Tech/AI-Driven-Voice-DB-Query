@@ -9,7 +9,7 @@ import ValidationDashboard from '../components/ValidationDashboard';
 import {
   LogOut, History, Database, Mic, Send, AlertTriangle,
   Download, FileText, Table as TableIcon, FileJson,
-  CheckCircle, BarChart2, ShieldAlert, RefreshCw
+  CheckCircle, BarChart2, ShieldAlert, RefreshCw, Upload
 } from 'lucide-react';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -250,6 +250,7 @@ export default function Dashboard() {
         <div className="p-2 border-b border-slate-800 space-y-1">
           {[
             ['query', <Send className="w-3.5 h-3.5" />, 'Query Engine'],
+            ['files', <Upload className="w-3.5 h-3.5" />, 'Files / Uploads'],
             ['analytics', <BarChart2 className="w-3.5 h-3.5" />, 'Analytics'],
             ['validation', <ShieldAlert className="w-3.5 h-3.5" />, 'Validation'],
           ].map(([tab, icon, label]) => (
@@ -296,7 +297,7 @@ export default function Dashboard() {
 
         <header className="h-12 bg-white border-b border-slate-200 flex items-center px-6 shadow-sm z-10 shrink-0 gap-3">
           <h2 className="text-sm font-semibold text-slate-800">
-            {activeTab === 'query' ? 'Query Engine' : activeTab === 'analytics' ? 'Analytics Dashboard' : 'Data Validation'}
+            {activeTab === 'query' ? 'Query Engine' : activeTab === 'analytics' ? 'Analytics Dashboard' : activeTab === 'files' ? 'Files / Uploads' : 'Data Validation'}
           </h2>
           <span className="px-2 py-0.5 text-xs bg-blue-100 text-blue-700 rounded-full">MySQL</span>
           {results?.cached && <span className="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">Cached</span>}
@@ -329,11 +330,14 @@ export default function Dashboard() {
             {/* ── Validation Tab ── */}
             {activeTab === 'validation' && <ValidationDashboard />}
 
+            {/* ── Files / Uploads Tab ── */}
+            {activeTab === 'files' && (
+              <FileExplorer onDataLoaded={(info) => { setUploadNotice(info); setTimeout(() => setUploadNotice(null), 8000); }} />
+            )}
+
             {/* ── Query Tab ── */}
             {activeTab === 'query' && (
               <>
-                <FileExplorer onDataLoaded={(info) => { setUploadNotice(info); setTimeout(() => setUploadNotice(null), 8000); }} />
-
                 {/* Query input */}
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-2 focus-within:ring-2 focus-within:ring-blue-500 transition-all">
                   <form onSubmit={handleQuerySubmit} className="relative flex items-end">

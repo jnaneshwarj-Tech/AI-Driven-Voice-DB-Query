@@ -60,3 +60,18 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
     if not user:
         raise exc
     return user
+
+
+def require_roles(*roles: str):
+    allowed_roles = {role.strip().casefold() for role in roles}
+
+    def role_dependency(current_user: dict = Depends(get_current_user)) -> dict:
+        role = str(current_user.get("role", "")).strip().casefold()
+        if role not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to perform this operation.",
+            )
+        return current_user
+
+    return role_dependency

@@ -11,6 +11,7 @@ export default function GpaTable({ data }) {
   const hasName    = data.some(r => r.name);
   const hasUsn     = data.some(r => r.usn);
   const hasSem     = data.some(r => r.semester != null);
+  const hasSubject = data.some(r => r.subject != null && String(r.subject).trim() !== '');
 
   // Client-side cumulative CGPA fallback (only if SQL didn't return cgpa column)
   const cumulativeCgpa = {};
@@ -58,6 +59,7 @@ export default function GpaTable({ data }) {
               <th className="px-3 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider w-8">#</th>
               {hasUsn  && <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">USN</th>}
               {hasName && <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Name</th>}
+              {hasSubject && <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Backlog subject</th>}
               {hasSem  && <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Sem</th>}
               {hasSgpa && <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">SGPA</th>}
               <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">
@@ -93,6 +95,7 @@ export default function GpaTable({ data }) {
                   <td className="px-3 py-2.5 text-xs text-slate-400 text-center">{i + 1}</td>
                   {hasUsn  && <td className="px-4 py-2.5 text-xs font-mono text-slate-500 whitespace-nowrap">{row.usn || '—'}</td>}
                   {hasName && <td className="px-4 py-2.5 font-medium text-slate-800 whitespace-nowrap">{row.name || '—'}</td>}
+                  {hasSubject && <td className="px-4 py-2.5 text-xs font-medium text-rose-600 whitespace-normal max-w-[220px]">{row.subject || '—'}</td>}
                   {hasSem  && <td className="px-4 py-2.5 font-medium text-slate-600 text-center">{row.semester ?? '—'}</td>}
                   {hasSgpa && (
                     <td className="px-4 py-2.5">

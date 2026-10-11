@@ -113,14 +113,21 @@ export default function ActivityDashboard() {
     });
 
     activities.uploads?.forEach(item => {
+      const isFileDelete = (item.operation_type || '').toUpperCase() === 'FILE_DELETE';
       timeline.push({
         ...item,
-        stream: 'upload',
-        icon: <UploadCloud className="w-4 h-4 text-indigo-500" />,
-        color: 'from-indigo-500/10 to-violet-500/10 text-indigo-600 border-indigo-200 dark:border-indigo-800/40',
-        title: 'Bulk Database Import',
-        desc: item.description || `Uploaded file data containing ${item.affected_students?.length} record(s)`,
-        tables: 'students, uploaded_files'
+        stream: isFileDelete ? 'upload' : 'upload',
+        icon: isFileDelete
+          ? <Trash2 className="w-4 h-4 text-rose-500" />
+          : <UploadCloud className="w-4 h-4 text-indigo-500" />,
+        color: isFileDelete
+          ? 'from-rose-500/10 to-orange-500/10 text-rose-600 border-rose-200 dark:border-rose-800/40'
+          : 'from-indigo-500/10 to-violet-500/10 text-indigo-600 border-indigo-200 dark:border-indigo-800/40',
+        title: isFileDelete ? 'Uploaded File Deleted' : 'Bulk Database Import',
+        desc: item.description || (isFileDelete
+          ? `Deleted file ${item.filename || ''}`.trim()
+          : `Uploaded file data containing ${item.affected_students?.length} record(s)`),
+        tables: isFileDelete ? 'students, marks, uploaded_files' : 'students, uploaded_files'
       });
     });
 

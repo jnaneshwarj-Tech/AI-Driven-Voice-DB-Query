@@ -79,6 +79,7 @@ _KANNADA_KEYWORDS: dict[str, str] = {
     'ಹುಡುಕಿ': 'search',
     'ಪಟ್ಟಿ': 'list',
     'ತೋರ್ಪಡಿಸಿ': 'display',
+    'ತೋರಿಸಿ': 'show',
 
     # Complete profile phrases (highest priority - checked first)
     'ಸಂಪೂರ್ಣ ಮಾಹಿತಿಯನ್ನು': 'complete information',
@@ -107,6 +108,9 @@ _KANNADA_KEYWORDS: dict[str, str] = {
     'ಸ್ಟುಡೆಂಟ್': 'student',
     'ವಿದ್ಯಾರ್ಥಿ': 'student',
     'ವಿದ್ಯಾರ್ಥಿಗಳು': 'students',
+    'ವಿದ್ಯಾರ್ಥಿಗಳನ್ನು': 'students',
+    'ಹೆಸರು': 'name',
+    'ಹೆಸರಿರುವ': 'name',
     'ಅವರ': 'of',          # possessive: "Manoj ಅವರ" = "of Manoj"
     'ಅವನ': 'of',
     'ಅವಳ': 'of',
@@ -119,6 +123,16 @@ _KANNADA_KEYWORDS: dict[str, str] = {
     'ಜಿಪಿಎ': 'gpa',
     'ಸೆಮಿಸ್ಟರ್': 'semester',
     'ಸೆಮ್': 'sem',
+    'ಒಂದನೇ': '1st',
+    'ಮೊದಲ': '1st',
+    'ಮೊದಲನೇ': '1st',
+    'ಎರಡನೇ': '2nd',
+    'ಮೂರನೇ': '3rd',
+    'ನಾಲ್ಕನೇ': '4th',
+    'ಐದನೇ': '5th',
+    'ಆರನೇ': '6th',
+    'ಏಳನೇ': '7th',
+    'ಎಂಟನೇ': '8th',
     'ಫಲಿತಾಂಶ': 'result',
     'ಫಲಿತಾಂಶಗಳು': 'results',
     'ಶ್ರೇಯಾಂಕ': 'rank',
@@ -127,11 +141,16 @@ _KANNADA_KEYWORDS: dict[str, str] = {
     'ಅಕಾಡೆಮಿಕ್': 'academic',
     'ಶೈಕ್ಷಣಿಕ': 'academic',
     'ಪ್ರದರ್ಶನ': 'performance',
+    'ಲ್ಯಾಟರಲ್ ಎಂಟ್ರಿ': 'lateral entry',
+    'ಲ್ಯಾಟರಲ್': 'lateral',
 
     # Personal
     'ವೈಯಕ್ತಿಕ': 'personal',
     'ತಂದೆ': 'father',
     'ತಾಯಿ': 'mother',
+    'ವಯಸ್ಸು': 'age',
+    'ವಯಸ್ಸಿನ': 'age',
+    'ವರ್ಷದ': 'years old',
     'ಹುಟ್ಟಿದ ದಿನಾಂಕ': 'date of birth',
     'ವಿಳಾಸ': 'address',
     'ಫೋನ್': 'phone',
@@ -139,6 +158,34 @@ _KANNADA_KEYWORDS: dict[str, str] = {
     'ಇಮೇಲ್': 'email',
     'ರಕ್ತದ ಗುಂಪು': 'blood group',
     'ಲಿಂಗ': 'gender',
+
+    # Birth / date terms
+    'ಹುಟ್ಟಿದ ದಿನಾಂಕ': 'date of birth',
+    'ಹುಟ್ಟಿರುವ': 'born',
+    'ಹುಟ್ಟಿರುವವರ': 'born',
+    'ಹುಟ್ಟಿದವರು': 'born',
+    'ಹುಟ್ಟಿದ': 'born',
+    'ಹುಟ್ಟು': 'born',
+    'ಜನನ': 'birth',
+
+    # Geography
+    'ನಗರದ': 'urban',
+    'ನಗರ': 'urban',
+    'ಜಿಲ್ಲೆಯ': 'district',
+    'ಜಿಲ್ಲೆ': 'district',
+    'ತಾಲೂಕಿನ': 'taluk',
+    'ತಾಲೂಕು': 'taluk',
+    'ರಾಜ್ಯದ': 'state',
+    'ರಾಜ್ಯ': 'state',
+    'ಗ್ರಾಮದ': 'rural',
+    'ಹಳ್ಳಿ': 'village',
+
+    # Range prepositions
+    'ರಿಂದ': 'from',
+    'ಮಧ್ಯೆಯ': 'between',
+    'ಮಧ್ಯೆ': 'between',
+    'ವರೆಗೆ': 'to',
+    'ಮಟ್ಟಿಗೆ': 'to',
 
     # Department/Branch
     'ಶಾಖೆ': 'branch',
@@ -159,6 +206,8 @@ _KANNADA_KEYWORDS: dict[str, str] = {
     'ಎಲ್ಲಾ': 'all',
     'ಸಂಪೂರ್ಣ': 'complete',
     'ಪೂರ್ಣ': 'full',
+    'ಎಷ್ಟು': 'how many',
+    'ಗ್ರಾಮೀಣ': 'rural',
 
     # Connectors / particles (often dropped)
     'ಆಫ್': 'of',
@@ -177,16 +226,36 @@ _KANNADA_KEYWORDS: dict[str, str] = {
     'information beku': 'information',
     'info beku': 'information',
     'details beku': 'details',
+    'sampoorna mahiti': 'complete information',
+    'sampurna mahiti': 'complete information',
+    'sampoorna mahithi': 'complete information',
+    'sampoorna vivara': 'complete details',
+    'poorna mahiti': 'full information',
+    'ella mahiti': 'all information',
+    'ella vivara': 'all details',
+    'avara sampoorna': 'complete',
+    'avara': 'of',
+    'avar': 'of',
+    'avan': 'of',
+    'aval': 'of',
+    'sampoorna': 'complete',
+    'sampurna': 'complete',
+    'poorna': 'full',
+    'mahiti': 'information',
+    'mahithi': 'information',
+    'maahiti': 'information',
+    'torisi': 'show',
+    'thorisi': 'show',
+    'tori': 'show',
+    'thori': 'show',
     'kodu': 'give',
     'kodi': 'give',
     'kodok': 'give',
     'beku': '',
     'biku': '',
     'ge': '',
-    'kodi': 'give',
     'vivara': 'details',
     'viwara': 'details',
-    'mahithi': 'information',
     'vaiyaktika': 'personal',
     'shaikshanika': 'academic',
     'yella': 'all',
@@ -194,10 +263,131 @@ _KANNADA_KEYWORDS: dict[str, str] = {
     'ella': 'all',
     'vidyarthigalu': 'students',
     'vidyarthi': 'student',
+    'eshtu': 'how much',
+    'estu': 'how much',
+    'enthu': 'how much',
+    'yestu': 'how much',
+    'vilasa': 'address',
+    'vilaasa': 'address',
+    'graameena': 'rural',
+    'grameena': 'rural',
+    'graameen': 'rural',
+    'gramina': 'rural',
+    'nagar': 'urban',
+    'nagariya': 'urban',
+    'ondane': '1st',
+    'modalane': '1st',
+    'modala': '1st',
+    'eradane': '2nd',
+    'moorane': '3rd',
+    'moorané': '3rd',
+    'murane': '3rd',
+    'muru': '3',
+    'nalkane': '4th',
+    'aidane': '5th',
+    'aarane': '6th',
+    'elane': '7th',
+    'yelane': '7th',
+    'entane': '8th',
+    'semistar': 'semester',
+    'semister': 'semester',
+    # Age / years (Romanized) — "21 varshada students" → "21 years old students"
+    'varshada': 'years old',
+    'varshadha': 'years old',
+    'varshagalu': 'years',
+    'varsha': 'years',
+    'vayassu': 'age',
+    'vayas': 'age',
+    # Parent / identity terms (Romanized)
+    'tande': 'father',
+    'thande': 'father',
+    'tandey': 'father',
+    'tayi': 'mother',
+    'taayi': 'mother',
+    'hesaru': 'name',
+    'hessaru': 'name',
+    'hesarina': 'name',
+    'iruva': 'having',
+    'iruvа': 'having',
+    'iruv': 'having',
+    'rakta': 'blood',
+    'rakthagumpa': 'blood group',
+    # ── Student Lifecycle (spec §9) — Kannada Unicode → English ──
+    'ಓದು ನಿಲ್ಲಿಸಿದ': 'discontinued studies',
+    'ಓದು ನಿಲ್ಲಿಸು': 'discontinued studies',
+    'ನಿಲ್ಲಿಸಿದ': 'discontinued',
+    'ಕಾಲೇಜು ಬಿಟ್ಟ': 'dropout left college',
+    'ಕಾಲೇಜು ಬಿಟ್ಟವರ': 'dropout left college',
+    'ಬಿಟ್ಟ ವಿದ್ಯಾರ್ಥಿ': 'dropout student',
+    'ಬಿಟ್ಟ': 'left',
+    'ಪ್ರವೇಶ ನಿಷೇಧ': 'discontinued',
+    'ವಿರಾಮ': 'discontinued',
+    'ಮರು ಪ್ರವೇಶ': 'readmission',
+    'ಮರುಪ್ರವೇಶ': 'readmission',
+    'ಮರು ಸೇರ್ಪಡೆ': 'readmission',
+    'ಮತ್ತೆ ಸೇರಿದ': 'rejoined',
+    'ಮತ್ತೆ ಸೇರಿದ್ದ': 'rejoined',
+    'ಮತ್ತೆ ಬಂದ': 'rejoined',
+    'ಕಾಲೇಜಿಗೆ ಸೇರಿದ': 'rejoined',
+    'ಕಾಲೇಜಿಗೆ ಬಂದ': 'rejoined',
+    'ಕಾಲೇಜಿಗೆ': 'to college',
+    'ಸೇರಿದ': 'joined',
+    'ಕಾಯುತ್ತಿರುವ': 'waiting pending',
+    'ಕಾಯುತಿರುವ': 'waiting pending',
+    'ಕಾಯುತ್ತಿವ': 'waiting pending',
+    'ಬಿಟ್ಟವರು': 'dropout',
+    'ಬಿಟ್ಟವರ': 'dropout',
+    'ಬಿಟ್ಟವರ್': 'dropout',
+    'ದಾಖಲೆ ಇತಿಹಾಸ': 'status history',
+    'ಸಂಪೂರ್ಣ ಇತಿಹಾಸ': 'complete status history',
+    'ಇತಿಹಾಸ': 'history',
+    # ── Student Lifecycle — Roman Kannada → English ──
+    'odu nilistida': 'discontinued studies',
+    'odu nilistid': 'discontinued studies',
+    'nilistida': 'discontinued',
+    'nilistid': 'discontinued',
+    'college bitta': 'dropout left college',
+    'koleju bitta': 'dropout left college',
+    'bittida': 'left',
+    'bitta': 'left',
+    'maru pravesa': 'readmission',
+    'maru pravesha': 'readmission',
+    'readmission': 'readmission',
+    'matte sere': 'rejoined',
+    'matte join': 'rejoined',
+    'matte serida': 'rejoined',
+    'matte band': 'rejoined',
+    'sere': 'joined',
 }
 
 # Compile sorted by length (longest first) to prevent partial replacements
 _SORTED_KW = sorted(_KANNADA_KEYWORDS.items(), key=lambda x: -len(x[0]))
+
+# Unambiguous Roman-Kannada marker words. These are never English words and never
+# plausible personal names, so their presence (as a whole word) reliably indicates a
+# Romanized-Kannada query even though the text contains no Kannada Unicode.
+_ROMAN_KN_MARKERS = {
+    'torisi', 'thorisi', 'tori', 'thori', 'mahiti', 'mahithi', 'maahiti',
+    'avara', 'beku', 'biku', 'kodu', 'kodi', 'kodok', 'eshtu', 'estu', 'yestu',
+    'vidyarthi', 'vidyarthigalu', 'varshada', 'varshadha', 'varshagalu', 'vayassu',
+    'grameena', 'graameena', 'gramina', 'graameen', 'nagariya', 'sampoorna',
+    'sampurna', 'vivara', 'viwara', 'iruva', 'hesaru', 'hessaru', 'semistar',
+    'semister', 'moorane', 'shaikshanika', 'vaiyaktika', 'rakthagumpa', 'tande',
+    'thande',
+    # Lifecycle Roman-Kannada markers (never English words / names)
+    'bitta', 'bittida', 'nilistida', 'nilistid', 'sere', 'serida', 'maru',
+    'pravesa', 'pravesha', 'koleju', 'vivid', 'viva',
+}
+_ROMAN_KN_MARKER_RE = re.compile(
+    r'\b(' + '|'.join(sorted(_ROMAN_KN_MARKERS, key=len, reverse=True)) + r')\b',
+    re.I,
+)
+
+
+def contains_roman_kannada(text: str) -> bool:
+    """True when ASCII text carries an unambiguous Romanized-Kannada marker word."""
+    return bool(_ROMAN_KN_MARKER_RE.search(text or ''))
+
 
 # Ordinal number suffixes in Kannada (e.g. "3ನೇ" → "3rd")
 _KANNADA_ORDINAL_RE = re.compile(r'(\d+)ನೇ')
@@ -274,10 +464,17 @@ def normalize_query(text: str) -> tuple[str, str]:
       - Ordinal numbers: "3ನೇ" → "3rd"
     """
     lang = detect_language(text)
-    if lang == 'english':
+    roman_kn = (lang == 'english') and contains_roman_kannada(text)
+    if lang == 'english' and not roman_kn:
         return text, 'english'
 
     result = text
+
+    result = re.sub(
+        r"([\u0C80-\u0CFF]+(?:\s+[\u0C80-\u0CFF]+)*)\s+ಅವರ\s+ತಂದೆ\s+ಹೆಸರಿರುವ",
+        r"students whose father name is \1",
+        result,
+    )
 
     # Replace ordinal suffixes: "3ನೇ" → "3rd", "5ನೇ" → "5th"
     def _ordinal_replace(m: re.Match) -> str:
@@ -286,18 +483,44 @@ def normalize_query(text: str) -> tuple[str, str]:
         return f'{n}{suffix}'
     result = _KANNADA_ORDINAL_RE.sub(_ordinal_replace, result)
 
-    # Replace Kannada keywords (longest match first to avoid partials)
+    # Replace Kannada keywords (longest match first to avoid partials).
+    # Roman-Kannada keys are matched on word boundaries so that short tokens
+    # ('ge', 'ella', …) never corrupt ordinary English words or names.
     for kn_word, en_word in _SORTED_KW:
-        if kn_word in result:
-            result = result.replace(kn_word, f' {en_word} ' if en_word else ' ')
+        replacement = f' {en_word} ' if en_word else ' '
+        if kn_word.isascii():
+            result = re.sub(
+                r'\b' + re.escape(kn_word) + r'\b',
+                replacement.replace('\\', '\\\\'),
+                result,
+                flags=re.I,
+            )
+        elif kn_word in result:
+            result = result.replace(kn_word, replacement)
 
     # Clean up multiple spaces
     result = re.sub(r'\s{2,}', ' ', result).strip()
 
-    # If pure Kannada names remain (Kannada script tokens with no keywords left),
-    # note them but leave them — the LLM handles LIKE '%<kannada_name>%' gracefully.
+    # Kannada case suffixes glue onto digits ("2006ರ", "2023ರ"). Strip any Kannada
+    # letter run immediately after a number so the year stays machine-parseable.
+    result = re.sub(r'(\d)[\u0C80-\u0CFF]+', r'\1 ', result)
 
-    return result, lang
+    # Kannada is SOV, so the verb "born" (ಹುಟ್ಟಿರುವ) often trails its year operands.
+    # Once mapped to English we may hold "... from ... between born". If a birth
+    # intent carries two years, rewrite them into the canonical inclusive range the
+    # query engine understands, independent of the original Kannada word order.
+    if re.search(r'\bborn\b', result, re.I):
+        _years = re.findall(r'\b(?:19|20)\d{2}\b', result)
+        if len(_years) >= 2:
+            _lo, _hi = sorted((int(_years[0]), int(_years[1])))
+            rest = re.sub(r'\bborn\b|\b(?:19|20)\d{2}\b', ' ', result, flags=re.I)
+            rest = re.sub(r'\b(?:from|between|and|to)\b', ' ', rest, flags=re.I)
+            rest = re.sub(r'\s{2,}', ' ', rest).strip()
+            result = f"born between {_lo} and {_hi} {rest}".strip()
+
+    result = re.sub(r'\s{2,}', ' ', result).strip()
+
+    return result, ('mixed' if roman_kn else lang)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

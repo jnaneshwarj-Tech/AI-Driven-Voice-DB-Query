@@ -93,7 +93,11 @@ def init():
             db_status     VARCHAR(20),
             row_count     INT,
             students_saved INT,
-            marks_saved   INT
+            marks_saved   INT,
+            trashed_at    DATETIME NULL,
+            trash_path    VARCHAR(512) NULL,
+            trash_undo_token VARCHAR(36) NULL,
+            data_reconciled_at DATETIME NULL
         )
         """,
     ]

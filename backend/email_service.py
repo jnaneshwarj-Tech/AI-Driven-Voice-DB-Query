@@ -8,6 +8,7 @@ Never exposes SMTP credentials, stack traces, or technical details to callers.
 On failure, raises EmailDeliveryError so the route layer can show a safe message.
 """
 import smtplib
+import time
 import logging
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -15,6 +16,12 @@ from email.utils import formataddr
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+# SMTP resilience: Gmail intermittently drops connections / returns 421-4.7.0.
+# A single attempt made resets fail "sometimes"; retry transient errors.
+_SMTP_MAX_ATTEMPTS = 3
+_SMTP_RETRY_BACKOFF = (1.0, 2.0)   # seconds between attempts 1->2 and 2->3
+_SMTP_TIMEOUT = 20                 # seconds per connection attempt
 
 
 class EmailDeliveryError(Exception):
@@ -180,17 +187,22 @@ def send_otp_email(to_email: str, username: str, otp: str) -> None:
     """
     Send a password-reset OTP email.
 
+    Retries transient SMTP/network failures (Gmail intermittently returns
+    421/4.7.0 or drops the connection) with short backoff, so a single blip no
+    longer fails the reset. Permanent failures (bad credentials) are NOT
+    retried.
+
     Raises:
-        EmailDeliveryError: if SMTP delivery fails. Callers must catch this
-            and return a safe generic message to the user.
+        EmailDeliveryError: if SMTP delivery fails after retries. Callers must
+            catch this and return a safe generic message to the user.
     """
     # Always log to server console for ops visibility (never log OTP value in production)
     logger.info("[EMAIL] Sending OTP email to %s for user %s", to_email, username)
-    
+
     # Debug: Check what we received
     mail_user = settings.MAIL_USERNAME or ""
     mail_pass = settings.MAIL_PASSWORD or ""
-    
+
     # Dev mode if either is empty/whitespace
     if not mail_user.strip() or not mail_pass.strip():
         # Dev-mode fallback: print to console only
@@ -212,29 +224,42 @@ def send_otp_email(to_email: str, username: str, otp: str) -> None:
     msg = _build_otp_email(to_email, username, otp)
     sender_addr = settings.MAIL_FROM or settings.MAIL_USERNAME
 
-    try:
-        with smtplib.SMTP(settings.MAIL_SERVER, settings.MAIL_PORT, timeout=15) as server:
-            server.ehlo()
-            if settings.MAIL_USE_TLS:
-                server.starttls()
+    last_error = None
+    for attempt in range(1, _SMTP_MAX_ATTEMPTS + 1):
+        try:
+            with smtplib.SMTP(settings.MAIL_SERVER, settings.MAIL_PORT, timeout=_SMTP_TIMEOUT) as server:
                 server.ehlo()
-            server.login(settings.MAIL_USERNAME, settings.MAIL_PASSWORD)
-            server.sendmail(sender_addr, [to_email], msg.as_string())
+                if settings.MAIL_USE_TLS:
+                    server.starttls()
+                    server.ehlo()
+                server.login(settings.MAIL_USERNAME, settings.MAIL_PASSWORD)
+                server.sendmail(sender_addr, [to_email], msg.as_string())
 
-        logger.info("[EMAIL] OTP email delivered successfully to %s", to_email)
+            logger.info("[EMAIL] OTP email delivered successfully to %s (attempt %d)",
+                        to_email, attempt)
+            return
 
-    except smtplib.SMTPAuthenticationError as exc:
-        logger.error("[EMAIL] SMTP authentication failed: %s", exc)
-        raise EmailDeliveryError(
-            "SMTP authentication failed. Check MAIL_USERNAME / MAIL_PASSWORD in .env. "
-            "For Gmail, use a 16-character App Password, not your account password."
-        ) from exc
-    except smtplib.SMTPException as exc:
-        logger.error("[EMAIL] SMTP error sending to %s: %s", to_email, exc)
-        raise EmailDeliveryError(f"SMTP delivery failed: {exc}") from exc
-    except OSError as exc:
-        logger.error("[EMAIL] Network error sending to %s: %s", to_email, exc)
-        raise EmailDeliveryError(f"Network error: {exc}") from exc
+        except smtplib.SMTPAuthenticationError as exc:
+            # Permanent: wrong credentials / app-password. Retrying is pointless.
+            logger.error("[EMAIL] SMTP authentication failed: %s", exc)
+            raise EmailDeliveryError(
+                "SMTP authentication failed. Check MAIL_USERNAME / MAIL_PASSWORD in .env. "
+                "For Gmail, use a 16-character App Password, not your account password."
+            ) from exc
+
+        except (smtplib.SMTPException, OSError) as exc:
+            # Transient: 421/4.7.0, TLS hiccup, timeout, connection reset. Retry.
+            last_error = exc
+            logger.warning("[EMAIL] Transient SMTP failure to %s (attempt %d/%d): %s",
+                           to_email, attempt, _SMTP_MAX_ATTEMPTS, exc)
+            if attempt < _SMTP_MAX_ATTEMPTS:
+                time.sleep(_SMTP_RETRY_BACKOFF[attempt - 1])
+
+    logger.error("[EMAIL] OTP delivery to %s failed after %d attempts: %s",
+                 to_email, _SMTP_MAX_ATTEMPTS, last_error)
+    raise EmailDeliveryError(
+        f"SMTP delivery failed after {_SMTP_MAX_ATTEMPTS} attempts: {last_error}"
+    ) from last_error
 
 
 # ── Legacy shim — kept so existing imports in routes_auth.py don't break ─────

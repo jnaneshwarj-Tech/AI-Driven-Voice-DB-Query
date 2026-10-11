@@ -14,7 +14,9 @@ import { useToast } from '../components/Toast';
 import OperationResultModal from '../components/OperationResultModal';
 import ActivityDashboard from '../components/ActivityDashboard';
 import BackupRestore from '../components/BackupRestore';
+import LifecycleDashboard from '../components/LifecycleDashboard';
 import CombinedStudentView from '../components/CombinedStudentView';
+import ReportModal from '../components/ReportModal';
 import LanguageSelector from '../components/LanguageSelector';
 import { useTheme } from '../context/ThemeContext';
 import { getPlaceholderText, getExampleQueries } from '../utils/kannadaTransliteration';
@@ -24,7 +26,8 @@ import {
   Download, FileText, Table as TableIcon,
   CheckCircle, BarChart2, ShieldAlert, Printer, Search, User, GraduationCap,
   PlusCircle, Trash2, Clock, ChevronRight, RotateCcw, Activity,
-  Zap, RefreshCw, Moon, Sun, Bell, HardDrive, Languages, MapPin
+  ChevronDown, ChevronUp,
+  Zap, RefreshCw, Moon, Sun, Bell, HardDrive, Languages, MapPin, Upload
 } from 'lucide-react';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -56,6 +59,47 @@ function flattenDoc(obj, prefix = '') {
 // Detect chart trigger words
 function shouldShowChart(query) {
   return /\b(top|compare|trend|chart|graph|bar|pie|line|rank|best|worst|distribution)\b/i.test(query);
+}
+
+const QUERY_FIELD_LABELS = {
+  student_type: 'Student type', branch: 'Branch', current_sem: 'Semester',
+  blood_group: 'Blood group', rural_status: 'Residence',
+  emergency_contact_number: 'Emergency contact', cgpa: 'CGPA', sgpa: 'SGPA',
+  father_name: "Father's name", mother_name: "Mother's name", age: 'Age',
+  gender: 'Gender', location: 'Location', status: 'Status', phone: 'Phone',
+  address: 'Address', dob: 'Date of birth', year_of_joining: 'Year of joining',
+};
+
+function describeCondition(condition) {
+  const label = QUERY_FIELD_LABELS[condition.field] || condition.field;
+  const value = Array.isArray(condition.value) ? condition.value.join(', ') : condition.value;
+  const operators = {
+    MISSING: 'is missing', PRESENT: 'is present', CONTAINS: 'contains',
+    IN: 'is', NOT_IN: 'is not', GREATER_THAN: '>', GREATER_EQUAL: '>=',
+    LESS_THAN: '<', LESS_EQUAL: '<=', BETWEEN: 'between', NOT_EQUALS: 'is not',
+  };
+  const operator = operators[condition.operator] || '=';
+  if (condition.operator === 'MISSING' || condition.operator === 'PRESENT') return `${label} ${operator}`;
+  return `${label} ${operator} ${maskSensitive(String(value))}`;
+}
+
+// ── Debug output masking: never leak PII in the query-details panel ───────────
+function maskSensitive(value) {
+  if (value == null) return value;
+  return String(value)
+    .replace(/\b[\w.+-]+@[\w-]+\.[\w.-]+\b/g, (m) => m[0] + '***@***')
+    .replace(/\b\d{12}\b/g, (m) => `${m.slice(0, 2)}**********`)
+    .replace(/\b\d{10}\b/g, (m) => `${m.slice(0, 2)}********`);
+}
+
+function maskDebugParameters(params) {
+  if (params == null) return params;
+  if (Array.isArray(params)) return params.map(maskDebugParameters);
+  if (typeof params === 'object') {
+    return Object.fromEntries(Object.entries(params).map(([k, v]) => [k, maskDebugParameters(v)]));
+  }
+  if (typeof params === 'string') return maskSensitive(params);
+  return params;
 }
 
 // ── Highlight matching letters in suggestion names ────────────────────────────
@@ -118,7 +162,9 @@ const MATCH_BADGE = {
 };
 
 // ── Generic Table ─────────────────────────────────────────────────────────────
-function GenericTable({ data, responseLanguage = 'english' }) {
+export const rowSelectionKey = (r, i) => String(r.usn || r.name || `row-${i}`);
+
+function GenericTable({ data, responseLanguage = 'english', onViewRows, selection, onToggleRow, onToggleAll }) {
   const [search, setSearch] = useState('');
   const [sortCol, setSortCol] = useState(null);
   const [sortDir, setSortDir] = useState('asc');
@@ -161,6 +207,17 @@ function GenericTable({ data, responseLanguage = 'english' }) {
     setPage(1);
   };
 
+  // Publish the *displayed* rows (current search filter + sorting + page) so
+  // Generate Report can scope to page / selected / all matching records.
+  useEffect(() => {
+    onViewRows?.({ pageRows: paged, filteredRows: filtered });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, search, sortCol, sortDir, page]);
+
+  const selectable = !!onToggleRow;
+  const pageKeys = paged.map((r, i) => rowSelectionKey(r, (page - 1) * PAGE_SIZE + i));
+  const allPageChecked = pageKeys.length > 0 && pageKeys.every(k => selection?.[k]);
+
   return (
     <div>
       <div className="flex items-center gap-3 mb-3">
@@ -172,6 +229,13 @@ function GenericTable({ data, responseLanguage = 'english' }) {
         <table className="w-full text-sm">
           <thead className="bg-slate-50 border-b border-slate-200">
             <tr>
+              {selectable && (
+                <th className="px-3 py-2.5 w-9">
+                  <input type="checkbox" checked={allPageChecked}
+                    onChange={e => onToggleAll(pageKeys, paged, e.target.checked)}
+                    className="rounded border-slate-300" title="Select all rows on this page" />
+                </th>
+              )}
               {headers.map(h => (
                 <th key={h} onClick={() => toggleSort(h)}
                   className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer hover:bg-slate-100 whitespace-nowrap select-none">
@@ -181,15 +245,24 @@ function GenericTable({ data, responseLanguage = 'english' }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {paged.map((row, i) => (
-              <tr key={i} className="hover:bg-blue-50/30 transition-colors">
+            {paged.map((row, i) => {
+              const key = rowSelectionKey(row, (page - 1) * PAGE_SIZE + i);
+              return (
+              <tr key={key} className={selection?.[key] ? 'bg-indigo-50/60' : 'hover:bg-blue-50/30 transition-colors'}>
+                {selectable && (
+                  <td className="px-3 py-2.5">
+                    <input type="checkbox" checked={!!selection?.[key]}
+                      onChange={() => onToggleRow(key, row)} className="rounded border-slate-300" />
+                  </td>
+                )}
                 {headers.map(h => (
                   <td key={h} className="px-4 py-2.5 text-slate-700 whitespace-nowrap">
                     {row[h] !== null && row[h] !== undefined ? String(row[h]) : <span className="text-slate-300">—</span>}
                   </td>
                 ))}
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -346,6 +419,8 @@ export default function Dashboard() {
   const [query, setQuery]           = useState('');
   const [isListening, setIsListening] = useState(false);
   const [isLoading, setIsLoading]   = useState(false);
+  const [queryDebugOpen, setQueryDebugOpen] = useState(false);
+  const [queryComplete, setQueryComplete] = useState(false);
   const [results, setResults]       = useState(null);
   const [error, setError]           = useState('');
   const [suggestion, setSuggestion] = useState(null);
@@ -362,6 +437,10 @@ export default function Dashboard() {
   const [activeSuggestion, setActiveSuggestion] = useState(-1);
   const [liveSearchTerm, setLiveSearchTerm] = useState('');
   const [opResult, setOpResult]     = useState(null);  // OperationResultModal data
+  // ── Generate Report (category-scoped, from displayed dashboard results) ──
+  const [reportOpen, setReportOpen] = useState(false);
+  const [tableRowsView, setTableRowsView] = useState(null); // {pageRows, filteredRows}
+  const [selectedRows, setSelectedRows] = useState({});     // key -> row
   const [kannadaSuggestions, setKannadaSuggestions] = useState([]);  // Desh Kannada-style suggestions
   
   // ── Language State ────────────────────────────────────────────────────────
@@ -380,6 +459,8 @@ export default function Dashboard() {
   const confirmedEntity = useRef(null);
   const kannadaProcessor = useRef(null);
   const textareaRef = useRef(null);
+  const searchRequestRef = useRef({ id: 0, controller: null, query: null });
+  const queryCompleteTimerRef = useRef(null);
 
   useEffect(() => {
     if (!localStorage.getItem('token')) {
@@ -598,6 +679,8 @@ export default function Dashboard() {
   // Cleanup on unmount
   useEffect(() => {
     return () => {
+      searchRequestRef.current.controller?.abort();
+      clearTimeout(queryCompleteTimerRef.current);
       if (kannadaProcessor.current) {
         kannadaProcessor.current.cleanup();
       }
@@ -633,72 +716,98 @@ export default function Dashboard() {
     rec.start();
   };
 
-  // ── Print handler — compact, professional, no page breaks mid-section ────
-  const handlePrint = () => {
-    const content = document.getElementById('print-report-area');
-    if (!content) return;
-    const win = window.open('', '_blank', 'width=900,height=700');
-    win.document.write(`<html><head><title>Student Report</title>
-      <style>
-        @page { margin: 12mm 14mm; size: A4 portrait; }
-        * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; box-sizing: border-box; }
-        body { font-family: Arial, sans-serif; margin: 0; padding: 12px 16px; color: #111; font-size: 10pt; line-height: 1.35; }
-        table { width: 100%; border-collapse: collapse; table-layout: fixed; page-break-inside: auto; }
-        thead { display: table-header-group; }
-        tr { page-break-inside: avoid; break-inside: avoid; }
-        th { background: #1e3a5f; color: #fff; padding: 5px 7px; font-size: 9pt; border: 1px solid #2a5298; }
-        td { padding: 4px 6px; font-size: 9pt; border: 1px solid #ddd; }
-        .print-section { page-break-inside: avoid; break-inside: avoid; }
-        .print-sig { page-break-inside: avoid; break-inside: avoid; }
-        img { max-width: 56px; max-height: 56px; }
-      </style>
-      </head><body>${content.innerHTML}</body></html>`);
-    win.document.close();
-    win.focus();
-    setTimeout(() => { win.print(); win.close(); }, 400);
+  // ── Generate Report scope helpers ───────────────────────────────────────────
+  const toggleReportRow = useCallback((key, row) => {
+    setSelectedRows(prev => {
+      const next = { ...prev };
+      if (next[key]) delete next[key]; else next[key] = row;
+      return next;
+    });
+  }, []);
+
+  const setAllReportRows = useCallback((keys, rows, checked) => {
+    setSelectedRows(prev => {
+      const next = { ...prev };
+      keys.forEach((k, i) => { if (checked) next[k] = rows[i]; else delete next[k]; });
+      return next;
+    });
+  }, []);
+
+  const runQuerySearch = async (queryValue, languageAtSubmit = selectedLanguage) => {
+    const submittedQuery = String(queryValue ?? '').trim();
+    if (!submittedQuery) return;
+    if (searchRequestRef.current.controller && searchRequestRef.current.query === submittedQuery) return;
+
+    searchRequestRef.current.controller?.abort();
+    const requestId = searchRequestRef.current.id + 1;
+    const controller = new AbortController();
+    searchRequestRef.current = { id: requestId, controller, query: submittedQuery };
+    setIsLoading(true);
+    setError('');
+    setResults(null);
+    setSuggestion(null);
+    setNoMatchMsg('');
+    setQueryDebugOpen(false);
+    setQueryComplete(false);
+    setSelectedRows({});
+    setTableRowsView(null);
+    clearTimeout(queryCompleteTimerRef.current);
+    try {
+      const payload = {
+        natural_query: submittedQuery,
+        language: languageAtSubmit,
+        response_language: languageAtSubmit === 'kannada' ? 'kannada' : (languageAtSubmit === 'mixed' ? 'mixed' : 'english'),
+        debug: import.meta.env.DEV,
+      };
+      const res = await api.post('/query/generate', payload, { signal: controller.signal });
+      if (searchRequestRef.current.id !== requestId) return;
+
+      if (res.data.action_required === 'confirm') {
+        setConfirmModal({ isOpen: true, data: res.data });
+        setSecondConfirm(false);
+      } else if (res.data.action_required === 'select_student') {
+        const picks = (res.data.suggestions || []).map((s) => ({
+          usn: s.usn,
+          name: s.name || s.usn,
+          branch: s.branch,
+          current_sem: s.current_sem ?? s.semester,
+          score: s.score ?? 1,
+        }));
+        setSuggestion({
+          type: picks.length > 1 ? 'multiple_match' : 'possible_matches',
+          message: res.data.message || 'Please select the student.',
+          suggestions: picks,
+        });
+        setNoMatchMsg(picks.length ? '' : (res.data.message || 'Please specify which student.'));
+      } else {
+        const rows = Array.isArray(res.data.data) ? res.data.data : [];
+        setSuggestion(res.data.suggestion || null);
+        setNoMatchMsg(res.data.no_match_message || '');
+        setResults({ ...res.data, data: rows, _query: submittedQuery, intent: res.data.intent || 'full' });
+        setQueryComplete(true);
+        queryCompleteTimerRef.current = setTimeout(() => setQueryComplete(false), 900);
+        void fetchHistory();
+      }
+    } catch (err) {
+      const isCurrentRequest = searchRequestRef.current.id === requestId;
+      const wasAborted = err.code === 'ERR_CANCELED' || err.name === 'CanceledError';
+      if (isCurrentRequest && !wasAborted) setError(err.response?.data?.detail || 'Query failed.');
+    } finally {
+      if (searchRequestRef.current.id === requestId) {
+        searchRequestRef.current = { id: requestId, controller: null, query: null };
+        setIsLoading(false);
+      }
+    }
   };
 
   // ── Query submit ─────────────────────────────────────────────────────────────
   const handleQuerySubmit = async (e) => {
     if (e) e.preventDefault();
-    if (!query.trim()) return;
+    const submittedQuery = String(textareaRef.current?.value ?? query).trim();
+    if (!submittedQuery) return;
     setShowLiveDropdown(false);
-    setLiveSuggestions([]);
     setActiveSuggestion(-1);
-    setIsLoading(true); setError(''); setResults(null); setSuggestion(null); setNoMatchMsg('');
-    try {
-      // Send original query + language context to backend
-      // Backend will handle semantic translation if needed
-      const payload = {
-        natural_query: query.trim(),
-        language: selectedLanguage,
-        response_language: selectedLanguage === 'kannada' ? 'kannada' : (selectedLanguage === 'mixed' ? 'mixed' : 'english')
-      };
-      
-      const res = await api.post('/query/generate', payload);
-      
-      if (res.data.action_required === 'confirm') {
-        setConfirmModal({ isOpen: true, data: res.data });
-        setSecondConfirm(false);
-      } else {
-        if (res.data.no_match_message) {
-          setNoMatchMsg(res.data.no_match_message);
-        }
-        if (res.data.suggestion) {
-          setSuggestion(res.data.suggestion);
-        }
-        if (res.data.auto_corrected) {
-          setResults({ ...res.data, _query: query, intent: res.data.intent || 'full' });
-        } else if (res.data.data?.length > 0) {
-          setResults({ ...res.data, _query: query, intent: res.data.intent || 'full' });
-        }
-        fetchHistory();
-      }
-    } catch (err) {
-      setError(err.response?.data?.detail || 'Query failed.');
-    } finally {
-      setIsLoading(false);
-    }
+    await runQuerySearch(submittedQuery, selectedLanguage);
   };
 
   // ── Select from live dropdown ─────────────────────────────────────────────────
@@ -739,38 +848,7 @@ export default function Dashboard() {
     // 4. Update the textarea to show the rebuilt query (so user can see what ran)
     setQuery(finalQuery);
 
-    // 5. Execute immediately with language context
-    setIsLoading(true);
-    setError('');
-    setResults(null);
-    setSuggestion(null);
-    setNoMatchMsg('');
-    try {
-      const payload = {
-        natural_query: finalQuery,
-        language: selectedLanguage,
-        response_language: selectedLanguage === 'kannada' ? 'kannada' : (selectedLanguage === 'mixed' ? 'mixed' : 'english')
-      };
-      
-      const res = await api.post('/query/generate', payload);
-      if (res.data.action_required === 'confirm') {
-        setConfirmModal({ isOpen: true, data: res.data });
-        setSecondConfirm(false);
-      } else {
-        if (res.data.no_match_message) setNoMatchMsg(res.data.no_match_message);
-        if (res.data.suggestion)       setSuggestion(res.data.suggestion);
-        if (res.data.auto_corrected) {
-          setResults({ ...res.data, _query: finalQuery, intent: res.data.intent || 'full' });
-        } else if (res.data.data?.length > 0) {
-          setResults({ ...res.data, _query: finalQuery, intent: res.data.intent || 'full' });
-        }
-        fetchHistory();
-      }
-    } catch (err) {
-      setError(err.response?.data?.detail || 'Query failed.');
-    } finally {
-      setIsLoading(false);
-    }
+    await runQuerySearch(finalQuery, selectedLanguage);
   };
 
   // YES → load the suggested student's data directly
@@ -797,23 +875,7 @@ export default function Dashboard() {
       // No pre-fetched data — execute query for this student
       const naturalQuery = `Show details of ${s.name}`;
       setQuery(naturalQuery);
-      setIsLoading(true); setError('');
-      try {
-        const payload = {
-          natural_query: naturalQuery,
-          language: selectedLanguage,
-          response_language: selectedLanguage === 'kannada' ? 'kannada' : (selectedLanguage === 'mixed' ? 'mixed' : 'english')
-        };
-        const res = await api.post('/query/generate', payload);
-        if (res.data.data?.length > 0) {
-          setResults({ ...res.data, _query: naturalQuery, intent: res.data.intent || 'full' });
-        }
-        fetchHistory();
-      } catch (err) {
-        setError(getUserMessage(err, 'Something went wrong. Please try again.'));
-      } finally {
-        setIsLoading(false);
-      }
+      await runQuerySearch(naturalQuery, selectedLanguage);
     }
   };
 
@@ -826,10 +888,51 @@ export default function Dashboard() {
 
   const executeConfirmed = async () => {
     setIsLoading(true); setError('');
+    const cd = confirmModal.data || {};
+
+    // Natural-language fee / lifecycle previews carry an explicit confirm_endpoint
+    // (no SQL query_dict). Route them to their dedicated commit endpoint.
+    if (cd.confirm_endpoint) {
+      try {
+        const isLifecycle = String(cd.confirm_endpoint).includes('/lifecycle/');
+        const body = isLifecycle
+          ? { payload: cd.payload, confirmation_token: cd.confirmation_token }
+          : { ...(cd.payload || {}), confirm: true };
+        // The backend advertises absolute paths ("/api/update/fees") while this
+        // axios client already has baseURL "/api" — posting the raw value asked
+        // for /api/api/update/fees and failed with a bare "Not Found".
+        const path = String(cd.confirm_endpoint).replace(/^\/?api\//, '/');
+        const res = await api.post(path, body);
+        setConfirmModal({ isOpen: false, data: null });
+        setResults({ success: true, message: res.data.message || 'Operation executed.', data: [], _query: '' });
+        showToast({
+          type: 'success',
+          title: isLifecycle ? 'Lifecycle updated' : 'Fees updated',
+          message: res.data.message || (isLifecycle
+            ? `${res.data.from_status || ''} → ${res.data.to_status || ''}`.trim()
+            : 'Fee status saved.'),
+          undoToken: res.data.undo_token,
+          undoName: cd.payload?.usn,
+          duration: 8000,
+        });
+        fetchHistory();
+      } catch (err) {
+        const message = getUserMessage(err, 'Could not complete the operation.');
+        setError(message);
+        setConfirmModal({ isOpen: false, data: null });
+        showToast({ type: 'error', message });
+      } finally {
+        setIsLoading(false);
+      }
+      return;
+    }
+
     try {
       const res = await api.post('/query/execute', {
         query_dict: confirmModal.data.query_dict,
-        original_query: confirmModal.data.original_query
+        original_query: confirmModal.data.original_query,
+        confirmed: true,
+        confirmation_token: confirmModal.data.confirmation_token,
       });
       setConfirmModal({ isOpen: false, data: null });
       setResults({ success: true, message: 'Operation executed.', data: res.data.data || [], _query: '' });
@@ -881,20 +984,10 @@ export default function Dashboard() {
     }
   };
 
-  // ── Export ───────────────────────────────────────────────────────────────────
-  const handleExport = async (format) => {
-    if (!results?.data?.length) return;
-    try {
-      const res = await api.post(`/export/${format}`, results.data, { responseType: 'blob' });
-      const url = window.URL.createObjectURL(new Blob([res.data]));
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `results.${format === 'excel' ? 'xlsx' : format}`;
-      document.body.appendChild(a); a.click(); a.remove();
-    } catch { setError(`Export as ${format} failed.`); }
-  };
+  // ── Export is handled by the ReportModal (category + scope + format) ───────
 
   const data = results?.data || [];
+  const appliedConditions = results?.query_ast?.conditions || [];
 
   const keys = new Set();
   for (let i = 0; i < Math.min(5, data.length); i++) {
@@ -921,11 +1014,16 @@ export default function Dashboard() {
     return usns.size === 1;
   })();
 
-  // Show CombinedStudentView when complete-profile intent OR single student with both data types
+  // Show CombinedStudentView when:
+  // - complete_profile intent (user asked for full details)
+  // - OR single student result with personal fields (even without academic)
+  // Do NOT show for pure 'academic' intent — GpaTable handles that
   const showCombined = data.length > 0 && (
-    isCompleteProfileIntent ||
-    (isSingleStudent && hasAcademic && hasPersonal)
+    results?.intent === 'complete_profile' ||
+    (isCompleteProfileIntent && results?.intent !== 'academic') ||
+    (isSingleStudent && hasPersonal && results?.intent !== 'academic' && results?.intent !== 'specific_field')
   );
+  // Academic intent: pure marks query → GpaTable
   const showGpa     = !showCombined && isGpaData(data);
   const showGeneric = !showCombined && !showGpa && data.length > 0;
   const showChart   = data.length > 0 && shouldShowChart(results?._query || '');
@@ -990,9 +1088,11 @@ export default function Dashboard() {
         <div className="p-2 border-b border-slate-800 space-y-1">
           {[
             ['query',      <Send className="w-3.5 h-3.5" />,      'Query Engine'],
+            ['files',      <Upload className="w-3.5 h-3.5" />,    'Files / Uploads'],
             ['backup',     <HardDrive className="w-3.5 h-3.5" />, 'Database & Backup'],
             ['analytics',  <BarChart2 className="w-3.5 h-3.5" />, 'Analytics'],
             ['validation', <ShieldAlert className="w-3.5 h-3.5" />,'Validation'],
+            ['lifecycle',  <GraduationCap className="w-3.5 h-3.5" />, 'Student Lifecycle'],
             ['activity',   <Activity className="w-3.5 h-3.5" />,   'Activity Logs'],
           ].map(([tab, icon, label]) => (
             <button key={tab} onClick={() => setActiveTab(tab)}
@@ -1102,8 +1202,10 @@ export default function Dashboard() {
         <header className="h-12 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center px-6 shadow-sm z-10 shrink-0 gap-3">
           <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
             {activeTab === 'query' ? 'Query Engine'
+              : activeTab === 'files' ? 'Files / Uploads'
               : activeTab === 'backup' ? 'Database Reliability & Backup Center'
               : activeTab === 'analytics' ? 'Analytics Dashboard'
+              : activeTab === 'lifecycle' ? 'Student Lifecycle Management'
               : activeTab === 'activity' ? 'Audit & Activity Logs'
               : 'Data Validation'}
           </h2>
@@ -1146,10 +1248,12 @@ export default function Dashboard() {
             {/* ── Activity Tab ── */}
             {activeTab === 'activity' && <ActivityDashboard />}
 
-            {/* ── Query Tab ── */}
-            {activeTab === 'query' && (
-              <>
-                <FileExplorer onDataLoaded={(info) => { 
+            {/* ── Student Lifecycle Tab ── */}
+            {activeTab === 'lifecycle' && <LifecycleDashboard role={role} />}
+
+            {/* ── Files / Uploads Tab ── */}
+            {activeTab === 'files' && (
+              <FileExplorer canManageFiles={role === 'Admin'} onDataLoaded={(info) => {
                   setUploadNotice(info); 
                   setTimeout(() => setUploadNotice(null), 8000); 
                   if (info.operation_details) {
@@ -1178,11 +1282,15 @@ export default function Dashboard() {
                         new_records: info.new_records,
                         updated_records: info.updated_records,
                       },
-                      message: info.message
                     });
                   }
+                  fetchHistory();
                 }} />
+            )}
 
+            {/* ── Query Tab ── */}
+            {activeTab === 'query' && (
+              <>
                 {/* Query input */}
                 <div className="relative z-50">
                   {/* Language and Voice Selectors */}
@@ -1294,8 +1402,10 @@ export default function Dashboard() {
                         <button type="submit" disabled={isLoading || !query.trim()}
                           className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition-all shadow-md shadow-blue-500/20 disabled:opacity-50">
                           {isLoading
-                            ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                            : <><Send className="w-3.5 h-3.5" /> Run Query</>}
+                            ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Searching...</>
+                            : queryComplete
+                              ? <><CheckCircle className="w-3.5 h-3.5" /> Query Complete</>
+                              : <><Send className="w-3.5 h-3.5" /> Run Query</>}
                         </button>
                       </div>
                     </form>
@@ -1440,8 +1550,18 @@ export default function Dashboard() {
                   <style>{`@keyframes slideDown { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:translateY(0); } }`}</style>
                 </div>
 
-                {/* Error — suppress while live suggestions are showing (user still typing) */}
-                {error && !showLiveDropdown && (
+                {isLoading && (
+                  <div role="status" aria-live="polite" className="flex items-center gap-3 p-4 bg-blue-50 border border-blue-200 rounded-xl">
+                    <div className="w-5 h-5 border-2 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
+                    <div>
+                      <p className="text-sm font-semibold text-blue-900">Searching students...</p>
+                      <p className="text-xs text-blue-700 mt-0.5">Applying the submitted filters and validating matching records.</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Error — suppress stale messages during a request or while typing */}
+                {error && !isLoading && !showLiveDropdown && (
                   <div className="bg-red-50 text-red-700 p-4 rounded-xl flex items-start gap-3 border border-red-100">
                     <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
                     <div>
@@ -1452,15 +1572,15 @@ export default function Dashboard() {
                 )}
 
                 {/* No-match message — only show when NOT typing (no live suggestions active) */}
-                {noMatchMsg && !suggestion && !showLiveDropdown && (
+                {noMatchMsg && !isLoading && !suggestion && !showLiveDropdown && (
                   <div className="flex items-start gap-3 p-4 bg-slate-50 border border-slate-200 rounded-2xl">
                     <AlertTriangle className="w-5 h-5 text-slate-400 flex-shrink-0 mt-0.5" />
                     <p className="text-sm text-slate-600 font-medium">{noMatchMsg}</p>
                   </div>
                 )}
 
-                {/* Suggestion panel — all types: suggestion | possible_matches | multiple_match */}
-                {suggestion && !results?.auto_corrected && (
+                {/* Suggestion panel — only when no result data yet */}
+                {suggestion && !results?.auto_corrected && !(results?.data?.length > 0) && (
                   <SuggestionPanel
                     suggestion={suggestion}
                     onYes={handleSuggestionYes}
@@ -1478,6 +1598,27 @@ export default function Dashboard() {
                 {/* Results */}
                 {results && (
                   <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                    {appliedConditions.length > 1 && (
+                      <section aria-label="Applied filters" className="px-5 py-4 border-b border-slate-100 bg-white">
+                        <div className="flex items-center justify-between gap-3 mb-2">
+                          <h4 className="text-xs font-bold uppercase tracking-wide text-slate-600">Applied filters</h4>
+                          <span className="text-[11px] text-slate-500">{appliedConditions.length} conditions</span>
+                        </div>
+                        <ul className="flex flex-wrap gap-2">
+                          {appliedConditions.map((condition, index) => (
+                            <li key={`${condition.field}-${index}`} className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-50 border border-slate-200 rounded-md text-xs text-slate-700">
+                              <CheckCircle className="w-3 h-3 text-green-600" />
+                              {describeCondition(condition)}
+                            </li>
+                          ))}
+                        </ul>
+                        {!data.length && (
+                          <p className="mt-3 text-xs text-slate-600">
+                            Conditions checked: {appliedConditions.map(describeCondition).join(' · ')}
+                          </p>
+                        )}
+                      </section>
+                    )}
                     <div className="px-5 py-3 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
                       <div className="flex items-center gap-3">
                         <div className="p-1.5 bg-green-100 text-green-700 rounded-lg">
@@ -1485,7 +1626,7 @@ export default function Dashboard() {
                         </div>
                         <div>
                           <h3 className="text-sm font-bold text-slate-800">
-                            {isScalarNumber ? 'Result' : isGirlsNamesList ? 'Female Students' : (data.length > 0 ? `${data.length} record(s)` : 'Operation Complete')}
+                            {isScalarNumber ? 'Result' : isGirlsNamesList ? 'Female Students' : (data.length > 0 ? `${data.length} record(s)` : (results.query_ast ? 'No matching students' : 'Operation Complete'))}
                           </h3>
                           {results.execution_time != null && (
                             <p className="text-xs text-slate-400">{(results.execution_time * 1000).toFixed(1)}ms{results.cached ? ' · from cache' : ''}</p>
@@ -1516,30 +1657,26 @@ export default function Dashboard() {
                               ಕ•KN
                             </span>
                           )}
-                          {[['csv',   <FileText className="w-3 h-3" />,    'CSV'],
-                            ['excel', <TableIcon className="w-3 h-3" />,   'Excel'],
-                            ['pdf',   <Download className="w-3 h-3" />,    'PDF'],
-                          ].map(([fmt, icon, label]) => (
-                            <button key={fmt} onClick={() => handleExport(fmt)}
-                              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg border border-slate-200 transition-colors">
-                              {icon} {label}
-                            </button>
-                          ))}
-                          <button onClick={handlePrint}
-                            className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50 rounded-lg border border-indigo-200 transition-colors">
-                            <Printer className="w-3 h-3" /> Print Report
+                          <button onClick={() => setReportOpen(true)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm transition-colors">
+                            <FileText className="w-3.5 h-3.5" /> Generate Report
                           </button>
                         </div>
                       )}
                     </div>
 
-                    {results.query && !isScalarNumber && (
-                      <div className="bg-slate-900 px-5 py-2 border-b border-slate-800">
-                        <p className="text-xs font-mono text-green-400 break-all">{results.query}</p>
-                      </div>
-                    )}
-
                     <div className="p-5 space-y-4">
+                      {results.message && !isScalarNumber && (
+                        <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-900">
+                          <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
+                          <span>{results.message}</span>
+                        </div>
+                      )}
+                      {results.total_count != null && !isScalarNumber && (
+                        <p className="text-sm font-semibold text-slate-700">
+                          Total: {results.total_count}
+                        </p>
+                      )}
                       {isScalarNumber ? (
                         <div className="flex flex-col items-center justify-center py-16 px-4 bg-white">
                           <span className="text-8xl font-black text-slate-900 tracking-tight select-all">
@@ -1567,7 +1704,9 @@ export default function Dashboard() {
                         <>
                           {showCombined && <CombinedStudentView data={data} responseLanguage={responseLanguage} />}
                           {showGpa && <GpaTable data={data} />}
-                          {showGeneric && <GenericTable data={data} responseLanguage={selectedLanguage} />}
+                          {showGeneric && <GenericTable data={data} responseLanguage={selectedLanguage}
+                            onViewRows={setTableRowsView} selection={selectedRows}
+                            onToggleRow={toggleReportRow} onToggleAll={setAllReportRows} />}
                           {showChart && <ResultChart data={data} query={results._query} />}
                         </>
                       )}
@@ -1576,11 +1715,71 @@ export default function Dashboard() {
                           {results.message || 'No records found.'}
                         </div>
                       )}
-                      {/* Printable report (hidden, activated on print) */}
-                      <div id="print-report-area" style={{ display: 'none' }}>
-                        <PrintReport data={data} username={username} role={role} query={results._query || ''} />
-                      </div>
                     </div>
+
+                    {import.meta.env.DEV && results.query_debug && (
+                      <div className="border-t border-slate-100 bg-slate-50">
+                        <div className="flex items-center justify-between gap-3 px-5 py-2.5 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={() => setQueryDebugOpen(value => !value)}
+                            aria-expanded={queryDebugOpen}
+                            className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 hover:text-blue-700 min-w-0"
+                          >
+                            {queryDebugOpen ? <ChevronUp className="w-3.5 h-3.5 shrink-0" /> : <ChevronDown className="w-3.5 h-3.5 shrink-0" />}
+                            <span className="truncate">Query Execution Details</span>
+                          </button>
+                          <div className="flex items-center gap-2 text-[11px] text-slate-500 flex-wrap">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white border border-slate-200">
+                              <Clock className="w-3 h-3" />
+                              {((results.execution_time ?? results.query_debug.execution_time ?? 0) * 1000).toFixed(0)} ms
+                            </span>
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white border border-slate-200">
+                              <TableIcon className="w-3 h-3" />
+                              {results.query_debug.returned_row_count ?? data.length} row(s)
+                            </span>
+                          </div>
+                        </div>
+                        {queryDebugOpen && (
+                          <div className="px-5 pb-4 space-y-3 text-xs text-slate-700 max-w-full overflow-hidden">
+                            <div className="flex justify-end">
+                              <button type="button" onClick={() => setQueryDebugOpen(false)} className="text-[11px] font-medium text-slate-500 hover:text-slate-800">
+                                Close
+                              </button>
+                            </div>
+                            {results.query_debug.normalized_query && (
+                              <p className="break-words"><strong className="text-slate-800">Normalized:</strong> {maskSensitive(results.query_debug.normalized_query)}</p>
+                            )}
+                            <div className="flex flex-wrap gap-x-4 gap-y-1">
+                              <p><strong className="text-slate-800">Intent:</strong> {results.query_debug.intent}</p>
+                              <p><strong className="text-slate-800">Validation:</strong> {results.query_debug.validation}</p>
+                            </div>
+                            {results.query_debug.conditions?.length > 0 && (
+                              <div>
+                                <p className="font-semibold text-slate-800 mb-1">Resolved filters</p>
+                                <ul className="flex flex-wrap gap-1.5">
+                                  {results.query_debug.conditions.map((condition, index) => (
+                                    <li key={index} className="px-2 py-0.5 bg-white border border-slate-200 rounded-md break-words">{describeCondition(condition)}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                            {results.query_debug.sql && (
+                              <div>
+                                <p className="font-semibold text-slate-800 mb-1">SQL (masked)</p>
+                                <pre className="p-3 rounded-md bg-slate-900 text-green-300 text-[11px] font-mono overflow-x-auto max-w-full whitespace-pre-wrap break-words">{maskSensitive(results.query_debug.sql)}</pre>
+                              </div>
+                            )}
+                            {results.query_debug.parameters != null && (
+                              <div>
+                                <p className="font-semibold text-slate-800 mb-1">Parameters (masked)</p>
+                                <pre className="p-3 rounded-md bg-slate-900 text-slate-100 text-[11px] font-mono overflow-x-auto max-w-full whitespace-pre-wrap break-words">{JSON.stringify(maskDebugParameters(results.query_debug.parameters), null, 2)}</pre>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </>
@@ -1588,6 +1787,17 @@ export default function Dashboard() {
           </div>
         </main>
       </div>
+
+      {/* ── Generate Report window ── */}
+      <ReportModal
+        open={reportOpen}
+        onClose={() => setReportOpen(false)}
+        query={results?._query || ''}
+        filteredRows={tableRowsView?.filteredRows || data}
+        pageRows={tableRowsView?.pageRows || data}
+        selectedRows={Object.values(selectedRows)}
+        hasPagedTable={!!(tableRowsView && showGeneric)}
+      />
 
       {/* ── Confirm Modal ── */}
       {confirmModal.isOpen && (
@@ -1599,16 +1809,28 @@ export default function Dashboard() {
                   <AlertTriangle className="w-5 h-5" />
                 </div>
                 <h3 className={`text-base font-bold ${secondConfirm ? 'text-red-800' : 'text-amber-800'}`}>
-                  {secondConfirm ? 'Final Warning — Cannot Undo' : `Confirm ${confirmModal.data?.action_type}`}
+                  {secondConfirm ? 'Final Confirmation' : `Confirm ${confirmModal.data?.action_type}`}
                 </h3>
               </div>
             </div>
             <div className="p-5 space-y-3">
               <p className="text-slate-600 text-sm">
                 {secondConfirm
-                  ? 'This action is permanent. Proceed?'
-                  : `You are about to execute a ${confirmModal.data?.action_type} operation.`}
+                  ? 'Confirm this operation now.'
+                  : confirmModal.data?.confirm_endpoint
+                    ? (confirmModal.data?.message || `You are about to ${confirmModal.data?.action_type === 'FEE_UPDATE' ? 'update this student’s fees' : 'record a lifecycle change'}.`)
+                    : confirmModal.data?.action_type === 'DELETE'
+                      ? 'Warning: This will permanently remove the selected student data. Do you want to continue?'
+                      : `You are about to execute a ${confirmModal.data?.action_type} operation.`}
               </p>
+              {/* Admin-only commit gate for NL fee / lifecycle previews */}
+              {confirmModal.data?.role_restricted === 'Admin' &&
+                String(role).toLowerCase() !== 'admin' && (
+                <div className="flex items-center gap-2 p-2.5 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">
+                  <ShieldAlert className="w-3.5 h-3.5 flex-shrink-0" />
+                  <span>This change is <strong>Admin-only</strong>. You don’t have permission to execute it.</span>
+                </div>
+              )}
               {/* UNDO notice for deletes */}
               {!secondConfirm && confirmModal.data?.action_type === 'DELETE' && (
                 <div className="flex items-center gap-2 p-2.5 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-700">
@@ -1616,11 +1838,13 @@ export default function Dashboard() {
                   <span>An <strong>UNDO</strong> option will appear for 30 seconds after deletion.</span>
                 </div>
               )}
-              <div className="bg-slate-900 p-3 rounded-lg overflow-x-auto">
-                <code className="text-xs font-mono text-green-400 whitespace-pre-wrap">
-                  {confirmModal.data?.query}
-                </code>
-              </div>
+              {confirmModal.data?.query && (
+                <div className="bg-slate-900 p-3 rounded-lg overflow-x-auto">
+                  <code className="text-xs font-mono text-green-400 whitespace-pre-wrap">
+                    {confirmModal.data.query}
+                  </code>
+                </div>
+              )}
             </div>
             <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
               <button onClick={() => setConfirmModal({ isOpen: false, data: null })}
@@ -1629,7 +1853,8 @@ export default function Dashboard() {
               </button>
               {!secondConfirm ? (
                 <button onClick={() => setSecondConfirm(true)}
-                  className="px-4 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 rounded-lg transition-colors">
+                  disabled={confirmModal.data?.role_restricted === 'Admin' && String(role).toLowerCase() !== 'admin'}
+                  className="px-4 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
                   Yes, proceed
                 </button>
               ) : (

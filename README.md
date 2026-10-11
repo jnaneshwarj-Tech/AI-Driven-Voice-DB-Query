@@ -44,6 +44,21 @@ It is built for:
 - AI Layer: NVIDIA LLM integration with schema-aware prompting
 - Security: SQL validation and query safety checks
 
+## Languages and Libraries Used
+| Language / technology | Libraries and purpose |
+| --- | --- |
+| Python | FastAPI for REST APIs; Uvicorn for the application server; Pydantic and Pydantic Settings for validation and configuration |
+| Python data processing | Pandas for CSV/Excel data handling; OpenPyXL for XLSX files; ReportLab for PDF reports |
+| Python database | MySQL Connector/Python for MySQL connections and transactions |
+| Python authentication | `python-jose[cryptography]` for JWT tokens; `bcrypt` for password hashing; `email-validator` for email validation |
+| Python integration | Requests for translation and AI HTTP calls; Python Multipart for file uploads; APScheduler for scheduled jobs; python-dotenv for environment variables |
+| JavaScript | React and React DOM for the user interface; React Router DOM for page navigation |
+| JavaScript communication | Axios for frontend-to-backend API requests |
+| JavaScript translation | Google Input Tools endpoint for Kannada phonetic transliteration; `@google-cloud/translate` for Google Cloud translation integration; local Kannada mappings provide fallback behavior |
+| JavaScript search and UI | Fuse.js, Fast Levenshtein, and String Similarity for fuzzy matching; Lucide React for icons; Recharts for analytics charts |
+| Frontend tooling | Vite for development/build; Tailwind CSS for styling; PostCSS and Autoprefixer for CSS processing; ESLint with React plugins for code quality |
+| Database | MySQL stores users, student personal data, academic marks, uploads, query history, audit records, OTP state, and recovery data |
+
 ## Architecture
 The system follows a clean layered structure:
 

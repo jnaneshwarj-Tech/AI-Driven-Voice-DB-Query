@@ -1,9 +1,23 @@
+import hashlib
+import hmac
+import json
 import re
+import time
+
+from config import settings
 
 
 _READ_OPERATIONS = {"SELECT"}
 _WRITE_OPERATIONS = {"INSERT", "UPDATE", "DELETE"}
-_ALLOWED_READ_TABLES = {"students", "marks", "uploaded_files"}
+_ALLOWED_READ_TABLES = {
+    "students", "marks", "uploaded_files",
+    # New tables added for extended Google Form fields
+    "student_fees", "student_backlogs",
+    # Student Lifecycle Management (read-only through the NL query engine)
+    "student_lifecycle_status", "student_lifecycle_events", "readmission_requests",
+    # Subquery aliases and CTEs — these are virtual table names, not real tables
+    "sub",
+}
 _LITERAL = re.compile(r'''(?:'(?:\\.|''|[^'\\])*'|"(?:\\.|""|[^"\\])*"|[-+]?\d+(?:\.\d+)?|NULL)''', re.I)
 _USN_FILTER = re.compile(
     r"\s*(?:s\.)?`?usn`?\s*=\s*'(?:\\.|''|[^'\\])*'\s*",
@@ -15,6 +29,97 @@ _DANGEROUS_READS = re.compile(
     r"\bFOR\s+UPDATE\b|\bLOCK\s+IN\s+SHARE\s+MODE\b",
     re.I,
 )
+_DELETE_ACTION = re.compile(
+    r"\b(?:delete|remove|erase|clear|truncate|drop|wipe|clean|destroy|purge|nuke|obliterate|annihilate|scrub|zap)\b|"
+    r"ಅಳಿಸ|ಡಿಲೀಟ್|ತೆಗೆದುಹಾಕ|ಕ್ಲಿಯರ್|ವಿನಾಶ|ಶುದ್ಧೀಕರಿಸ|పోగొట్టు|తొలగించు|విద్యార్థి.*అళిస",
+    re.I,
+)
+_DELETE_NEGATION = re.compile(
+    r"\b(?:do\s+not|don't|never|cancel|stop)\b.{0,32}\b"
+    r"(?:delete|remove|erase|clear|truncate|drop|wipe)\b",
+    re.I,
+)
+_DELETE_ALL_MARKER = re.compile(
+    r"\b(?:all|every|everything|entire|whole|complete)\b|"
+    r"ಎಲ್ಲಾ|ಎಲ್ಲ|ಸಂಪೂರ್ಣ|ಪೂರ್ಣ|అన్ని",
+    re.I,
+)
+_DELETE_ENTITY = re.compile(
+    r"\b(?:students?|records?|data|database|tables?|dataset|everything)\b|"
+    r"ವಿದ್ಯಾರ್ಥಿ|ಡೇಟಾ|ದಾಖಲೆ|ಡೇಟಾಬೇಸ್|ಟೇಬಲ್|విద్యార్థి|డేటా|డేటాబేస్",
+    re.I,
+)
+_GLOBAL_DELETE_TARGET = re.compile(
+    r"\b(?:database|tables?|dataset)\b|ಡೇಟಾಬೇಸ್|ಟೇಬಲ್|డేటాబేస్",
+    re.I,
+)
+# A raw "DELETE FROM <table>" with no WHERE clause wipes the whole table.
+_RAW_DELETE_NO_WHERE = re.compile(
+    r"\bdelete\s+from\s+`?(?:students?|marks|uploaded_files|student_db)`?\b(?!\s+where\b)",
+    re.I,
+)
+# TRUNCATE TABLE command also wipes the whole table
+_RAW_TRUNCATE = re.compile(
+    r"\btruncate\s+table\s+`?(?:students?|marks|uploaded_files|student_db)`?\b",
+    re.I,
+)
+# Raw SQL DELETE with a WHERE clause that matches every row (tautology/broad wildcard).
+_RAW_DELETE_BROAD_WHERE = re.compile(
+    r"\bdelete\s+from\s+`?(?:students?|marks|uploaded_files|student_db)`?\b\s+where\b.*?"
+    r"(?:\b1\s*=\s*1\b|\btrue\b|\b(?:or|and)\s+1\b|\b(?:or|and)\s+true\b|"
+    r"like\s*['\"][%_]['\"]|\bis\s+not\s+null\b|\busn\s+like\b|"
+    r"\btrue\b.*?\bor\b|\bor\b.*?\btrue\b|"
+    r"\b1\b.*?\bor\b|\bor\b.*?\b1\b)",
+    re.I | re.S,
+)
+
+
+def is_delete_request(text: str) -> bool:
+    normalized = str(text or "").strip()
+    if _DELETE_NEGATION.search(normalized):
+        return False
+    return bool(_DELETE_ACTION.search(normalized))
+
+
+def is_delete_all_request(text: str) -> bool:
+    normalized = str(text or "").strip()
+    if not is_delete_request(normalized):
+        return False
+    if _GLOBAL_DELETE_TARGET.search(normalized):
+        return True
+    if _RAW_DELETE_NO_WHERE.search(normalized):
+        return True
+    if _RAW_TRUNCATE.search(normalized):
+        return True
+    if _RAW_DELETE_BROAD_WHERE.search(normalized):
+        return True
+    return bool(_DELETE_ALL_MARKER.search(normalized) and _DELETE_ENTITY.search(normalized))
+
+
+def create_confirmation_token(query_dict: dict, username: str, issued_at: int | None = None) -> str:
+    timestamp = int(time.time()) if issued_at is None else int(issued_at)
+    serialized_query = json.dumps(query_dict, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    payload = f"{timestamp}\n{username}\n{serialized_query}".encode("utf-8")
+    secret = str(settings.JWT_SECRET_KEY or "").encode("utf-8")
+    if not secret:
+        raise ValueError("Delete confirmations require a configured signing secret.")
+    signature = hmac.new(secret, payload, hashlib.sha256).hexdigest()
+    return f"{timestamp}.{signature}"
+
+
+def verify_confirmation_token(
+    token: str, query_dict: dict, username: str, now: int | None = None, max_age_seconds: int = 300
+) -> bool:
+    try:
+        timestamp_text, supplied_signature = token.split(".", 1)
+        timestamp = int(timestamp_text)
+        current_time = int(time.time()) if now is None else int(now)
+        if timestamp > current_time + 30 or current_time - timestamp > max_age_seconds:
+            return False
+        expected = create_confirmation_token(query_dict, username, timestamp).split(".", 1)[1]
+        return hmac.compare_digest(supplied_signature, expected)
+    except (AttributeError, TypeError, ValueError):
+        return False
 
 
 def _scan_sql(sql: str) -> tuple[str | None, str]:
@@ -175,19 +280,17 @@ def validate_sql_query(query_dict, user_role: str) -> dict:
 
     if operation in _READ_OPERATIONS and _DANGEROUS_READS.search(masked_sql):
         return {"is_valid": False, "reason": "Unsafe read operation is not allowed."}
+    role = str(user_role).strip().lower()
+    if role not in {"admin", "staff"}:
+        return {"is_valid": False, "reason": f"Unknown role: {user_role}"}
+    if operation not in _READ_OPERATIONS | _WRITE_OPERATIONS:
+        return {"is_valid": False, "reason": f"Operation '{operation}' is not allowed."}
+    if operation == "DELETE" and role != "admin":
+        return {"is_valid": False, "reason": "Delete permission is available only to Admin."}
+
     if operation in _WRITE_OPERATIONS:
         shape_error = _validate_write_shape(sql, operation)
         if shape_error:
             return {"is_valid": False, "reason": shape_error}
-
-    role = str(user_role).strip().lower()
-    if role == "admin":
-        if operation not in _READ_OPERATIONS:
-            return {"is_valid": False, "reason": "Admin role is restricted to read operations only."}
-    elif role == "staff":
-        if operation not in _READ_OPERATIONS | _WRITE_OPERATIONS:
-            return {"is_valid": False, "reason": f"Operation '{operation}' is not allowed."}
-    else:
-        return {"is_valid": False, "reason": f"Unknown role: {user_role}"}
 
     return {"is_valid": True, "reason": "Valid"}

@@ -31,7 +31,7 @@ from fastapi import APIRouter, Depends, HTTPException, Body
 from pydantic import BaseModel
 
 from database import db_conn, write_audit_log
-from auth import get_current_user
+from auth import get_current_user, require_roles
 from config import settings
 
 router = APIRouter(prefix="/api/backup", tags=["Backup & Restore"])
@@ -339,11 +339,8 @@ class RestoreRequest(BaseModel):
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.post("/create")
-def create_backup(current_user: dict = Depends(get_current_user)):
+def create_backup(current_user: dict = Depends(require_roles("Admin"))):
     """Create a manual backup. Requires Admin role."""
-    if current_user["role"] != "Admin":
-        raise HTTPException(403, "Only Admin can create backups.")
-
     result = create_backup_internal(
         backup_type="manual",
         created_by=current_user["username"]
@@ -360,11 +357,8 @@ def create_backup(current_user: dict = Depends(get_current_user)):
 
 
 @router.get("/list")
-def list_backups(current_user: dict = Depends(get_current_user)):
+def list_backups(current_user: dict = Depends(require_roles("Admin"))):
     """List all backups. Requires Admin role."""
-    if current_user["role"] != "Admin":
-        raise HTTPException(403, "Only Admin can view backups.")
-
     with db_conn() as conn:
         cur = conn.cursor(dictionary=True)
         cur.execute(
@@ -481,7 +475,7 @@ def get_storage_status(current_user: dict = Depends(get_current_user)):
 def restore_backup(
     backup_id: int,
     body: RestoreRequest = Body(default=RestoreRequest()),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_roles("Admin"))
 ):
     """
     Restore database from a specific backup.
@@ -495,9 +489,6 @@ def restore_backup(
       5. Verify database integrity after restore.
       6. Write success/failure audit entry.
     """
-    if current_user["role"] != "Admin":
-        raise HTTPException(403, "Only Admin can restore backups.")
-
     if not body.confirmed:
         raise HTTPException(
             400,
@@ -600,11 +591,8 @@ def restore_backup(
 
 
 @router.delete("/{backup_id}")
-def delete_backup(backup_id: int, current_user: dict = Depends(get_current_user)):
+def delete_backup(backup_id: int, current_user: dict = Depends(require_roles("Admin"))):
     """Delete a backup file and its record. Requires Admin role."""
-    if current_user["role"] != "Admin":
-        raise HTTPException(403, "Only Admin can delete backups.")
-
     with db_conn() as conn:
         cur = conn.cursor(dictionary=True)
         cur.execute("SELECT * FROM db_backups WHERE id=%s", (backup_id,))

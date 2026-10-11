@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import routes_auth, routes_query, routes_export, routes_files, routes_undo
-import routes_backup, routes_monitor
+import routes_backup, routes_monitor, routes_lifecycle, routes_update
 from database import create_indexes, init_pool
 from scheduler import start_scheduler, stop_scheduler
 
@@ -42,6 +42,8 @@ app.include_router(routes_files.router)
 app.include_router(routes_undo.router)
 app.include_router(routes_backup.router)
 app.include_router(routes_monitor.router)
+app.include_router(routes_lifecycle.router)
+app.include_router(routes_update.router)
 
 @app.get("/")
 def root():
@@ -52,5 +54,15 @@ def root():
     }
 
 if __name__ == "__main__":
+    import os
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    # Dev convenience is preserved (auto-reload on), but the bind host, port and
+    # reload are now env-driven so production can start cleanly without editing
+    # code: set DEV_RELOAD=0 (and a proper host/port) behind a real ASGI server.
+    dev_reload = os.getenv("DEV_RELOAD", "1").strip().lower() in ("1", "true", "yes", "on")
+    uvicorn.run(
+        "main:app",
+        host=os.getenv("APP_HOST", "0.0.0.0"),
+        port=int(os.getenv("APP_PORT", "8000")),
+        reload=dev_reload,
+    )

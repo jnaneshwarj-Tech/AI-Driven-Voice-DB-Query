@@ -16,7 +16,7 @@ Endpoints:
   GET  /api/undo/history/{usn}         — change history for a student
   GET  /api/undo/validate/{token}      — validate if undo is safe (NEW)
 """
-import json, uuid
+import json, os, uuid
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from database import db_conn, write_audit_log
@@ -37,13 +37,18 @@ def canonical_operation_type(operation_type: str) -> str:
         "UPDATE": "UPDATE",
         "UPLOAD": "IMPORT",
         "IMPORT": "IMPORT",
+        "FILE_DELETE": "FILE_DELETE",
         "RESTORE": "RESTORE",
         "UNDO": "UNDO",
         "SEMESTER_UPDATE": "UPDATE",
     }.get((operation_type or "").upper(), (operation_type or "").upper())
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+def _is_bulk_operation(operation_type: str) -> bool:
+    """Bulk operations get a longer undo window."""
+    op = canonical_operation_type(operation_type)
+    return op in ("IMPORT", "FILE_DELETE") or operation_type.upper() == "SEMESTER_UPDATE"
+
 
 def _student_to_json(usn: str) -> tuple[str, str]:
     """Snapshot a student + their marks as JSON. Returns (student_json, marks_json)."""
@@ -71,15 +76,12 @@ def _student_to_json(usn: str) -> tuple[str, str]:
     return json.dumps(student_clean), json.dumps(marks_clean)
 
 
-def _is_bulk_operation(operation_type: str) -> bool:
-    """Bulk operations get a longer undo window."""
-    return canonical_operation_type(operation_type) == "IMPORT" or operation_type.upper() == "SEMESTER_UPDATE"
-
-
 def _check_undo_window(ts, operation_type: str) -> bool:
     """Return True if still within the undo window."""
     if isinstance(ts, str):
         ts = datetime.fromisoformat(ts)
+    if canonical_operation_type(operation_type) == "FILE_DELETE":
+        return datetime.now() - ts <= timedelta(days=30)
     if _is_bulk_operation(operation_type):
         window = timedelta(minutes=settings.UNDO_WINDOW_MINUTES_BULK)
     else:
@@ -122,18 +124,21 @@ def _json_value(value):
 
 
 def _capture_state(cur, usns: list[str]) -> dict:
-    """Capture exactly the student/marks state for the affected USNs."""
+    """Capture the student/marks/fees state for the affected USNs."""
     unique_usns = list(dict.fromkeys(u for u in usns if u))
     if not unique_usns:
-        return {"students": [], "marks": []}
+        return {"students": [], "marks": [], "fees": []}
     placeholders = ','.join(['%s'] * len(unique_usns))
     cur.execute(f"SELECT * FROM students WHERE usn IN ({placeholders}) ORDER BY usn", tuple(unique_usns))
     students = cur.fetchall()
     cur.execute(f"SELECT * FROM marks WHERE usn IN ({placeholders}) ORDER BY usn, semester", tuple(unique_usns))
     marks = cur.fetchall()
+    cur.execute(f"SELECT * FROM student_fees WHERE usn IN ({placeholders}) ORDER BY usn, fee_type, year", tuple(unique_usns))
+    fees = cur.fetchall()
     return {
         "students": [{k: _json_value(v) for k, v in row.items()} for row in students],
         "marks": [{k: _json_value(v) for k, v in row.items()} for row in marks],
+        "fees": [{k: _json_value(v) for k, v in row.items()} for row in fees],
     }
 
 
@@ -173,6 +178,7 @@ def create_undo_snapshot(
         snapshot_clean.update({
             "existing_students": before_state['students'],
             "existing_marks": before_state['marks'],
+            "existing_fees": before_state.get('fees', []),
             "new_usns": [u for u in unique_usns if u not in existing_usns],
         })
         cur.close()
@@ -214,12 +220,15 @@ def _undo_block_reason(record: dict, current_user: dict, conn=None) -> str | Non
     """Return a user-safe reason when a rollback is no longer safe."""
     if not record.get('committed') or not record.get('post_state_data'):
         return "This operation was not committed successfully and cannot be undone."
-    if record.get('performed_by') != current_user.get('username'):
+    is_file_delete = canonical_operation_type(record["operation_type"]) == "FILE_DELETE"
+    if is_file_delete and current_user.get("role") != "Admin":
+        return "Only an Admin can restore a file from Trash."
+    if not is_file_delete and record.get('performed_by') != current_user.get('username'):
         return "Permission denied. You can only undo your own operation."
     timestamp = record.get('timestamp')
     if isinstance(timestamp, str):
         timestamp = datetime.fromisoformat(timestamp)
-    if datetime.now() - timestamp > timedelta(days=settings.UNDO_RETENTION_DAYS):
+    if not is_file_delete and datetime.now() - timestamp > timedelta(days=settings.UNDO_RETENTION_DAYS):
         return "Undo history has expired."
     if not _check_undo_window(timestamp, record['operation_type']):
         bulk = _is_bulk_operation(record['operation_type'])
@@ -439,15 +448,43 @@ def restore_student(token: str, current_user: dict = Depends(get_current_user)):
     if not record:
         return _restore_legacy_soft_delete(token, current_user)
 
-    # Check undo window
-    ts = record['timestamp']
-    if record.get('performed_by') != current_user.get('username'):
+    is_file_delete = canonical_operation_type(record["operation_type"]) == "FILE_DELETE"
+    if is_file_delete and current_user.get("role") != "Admin":
+        raise HTTPException(403, "Only an Admin can restore a file from Trash.")
+
+    # Check undo ownership; file restores are Admin-managed through Trash.
+    if not is_file_delete and record.get('performed_by') != current_user.get('username'):
         raise HTTPException(403, "Permission denied. You can only undo your own operation.")
 
     snapshot_data = json.loads(record['snapshot_data'])
     existing_students = snapshot_data.get('existing_students', [])
     existing_marks = snapshot_data.get('existing_marks', [])
+    existing_fees = snapshot_data.get('existing_fees', [])
     new_usns = snapshot_data.get('new_usns', [])
+
+    file_trash_move = None
+    if is_file_delete:
+        filename = snapshot_data.get("file_delete_filename")
+        if filename:
+            with db_conn() as conn:
+                cur = conn.cursor(dictionary=True)
+                cur.execute(
+                    "SELECT trashed_at, trash_path FROM uploaded_files WHERE filename=%s",
+                    (filename,),
+                )
+                file_row = cur.fetchone()
+                cur.close()
+            if file_row and file_row.get("trashed_at") and datetime.now() - file_row["trashed_at"] > timedelta(days=30):
+                raise HTTPException(410, "The 30-day restore period has expired.")
+            if file_row and file_row.get("trash_path"):
+                from routes_files import _resolve_trash_path
+                trash_path = _resolve_trash_path(file_row["trash_path"])
+                original_path = os.path.join(settings.upload_dir_abs, filename)
+                if os.path.exists(trash_path):
+                    if os.path.exists(original_path):
+                        raise HTTPException(409, "A file with this name already exists. Move it before restoring.")
+                    os.replace(trash_path, original_path)
+                    file_trash_move = (trash_path, original_path)
 
     reverted_adds = 0
     reverted_updates = 0
@@ -471,6 +508,10 @@ def restore_student(token: str, current_user: dict = Depends(get_current_user)):
                         tuple(new_usns)
                     )
                     cur.execute(
+                        f"DELETE FROM student_fees WHERE usn IN ({format_strings})",
+                        tuple(new_usns)
+                    )
+                    cur.execute(
                         f"DELETE FROM students WHERE usn IN ({format_strings})",
                         tuple(new_usns)
                     )
@@ -481,6 +522,7 @@ def restore_student(token: str, current_user: dict = Depends(get_current_user)):
                     usn = s['usn']
                     # Delete current state
                     cur.execute("DELETE FROM marks WHERE usn=%s", (usn,))
+                    cur.execute("DELETE FROM student_fees WHERE usn=%s", (usn,))
                     cur.execute("DELETE FROM students WHERE usn=%s", (usn,))
 
                     # Re-insert previous state
@@ -508,6 +550,80 @@ def restore_student(token: str, current_user: dict = Depends(get_current_user)):
                     except Exception:
                         pass
 
+                # 3b. Re-insert previous fee rows
+                for f in existing_fees:
+                    cols = [k for k in f if k != 'id']
+                    placeholders = ', '.join(['%s'] * len(cols))
+                    col_names    = ', '.join([f'`{c}`' for c in cols])
+                    values       = [f[c] for c in cols]
+                    try:
+                        cur.execute(
+                            f"INSERT IGNORE INTO student_fees ({col_names}) VALUES ({placeholders})",
+                            values
+                        )
+                    except Exception:
+                        pass
+
+                # 3b. FILE_DELETE undo: restore provenance rows and uploaded_files row
+                if snapshot_data.get('operation_subtype') == 'FILE_DELETE' or \
+                   record.get('operation_type') == 'FILE_DELETE':
+                    deleted_filename = snapshot_data.get('file_delete_filename')
+                    if deleted_filename:
+                        # Restore student_field_sources is_active=1
+                        cur.execute(
+                            "UPDATE student_field_sources SET is_active=1 "
+                            "WHERE source_filename=%s",
+                            (deleted_filename,)
+                        )
+                        # Restore student column values from provenance snapshot
+                        # (fields that were NULLed out by the deletion)
+                        cur.execute(
+                            """SELECT usn, field_name, field_value
+                               FROM file_delete_provenance_snapshots
+                               WHERE undo_token=%s""",
+                            (token,)
+                        )
+                        prov_rows = cur.fetchall()
+                        from routes_files import STUDENT_COLS as _SCOLS
+                        safe_cols = set(_SCOLS)
+                        for pr in prov_rows:
+                            # cur is a positional (non-dictionary) cursor
+                            pr_usn, field, pr_value = pr[0], pr[1], pr[2]
+                            if field not in safe_cols:
+                                continue
+                            # Re-apply the value from the provenance snapshot
+                            # only if the current student column is NULL
+                            try:
+                                cur.execute(
+                                    f"UPDATE students SET `{field}`=COALESCE(`{field}`, %s) "
+                                    "WHERE usn=%s",
+                                    (pr_value, pr_usn)
+                                )
+                            except Exception:
+                                pass
+                        # Restore uploaded_files metadata row and clear its Trash marker.
+                        uf_row = snapshot_data.get('uploaded_file_row')
+                        if uf_row:
+                            try:
+                                cur.execute("SELECT id FROM uploaded_files WHERE filename=%s", (deleted_filename,))
+                                if cur.fetchone():
+                                    cur.execute(
+                                        "UPDATE uploaded_files SET trashed_at=NULL, trash_path=NULL, "
+                                        "trash_undo_token=NULL WHERE filename=%s",
+                                        (deleted_filename,),
+                                    )
+                                else:
+                                    uf_cols = [k for k in uf_row if k not in ('uploaded_at',)]
+                                    uf_ph   = ', '.join(['%s'] * len(uf_cols))
+                                    uf_names = ', '.join([f'`{c}`' for c in uf_cols])
+                                    uf_vals  = [uf_row[c] for c in uf_cols]
+                                    cur.execute(
+                                        f"INSERT IGNORE INTO uploaded_files ({uf_names}) VALUES ({uf_ph})",
+                                        uf_vals
+                                    )
+                            except Exception:
+                                pass
+
                 # 4. Mark as undone
                 cur.execute(
                     "UPDATE global_undo_snapshots SET undone=1, undone_by=%s, undone_at=NOW() WHERE undo_token=%s",
@@ -518,6 +634,11 @@ def restore_student(token: str, current_user: dict = Depends(get_current_user)):
                         "UPDATE deletion_logs SET restored=1 WHERE restore_token=%s",
                         (token,)
                     )
+                # 5. Invalidate query cache so next search reflects restored data
+                try:
+                    cur.execute("DELETE FROM query_cache")
+                except Exception:
+                    pass
 
                 conn.commit()
                 cur.close()
@@ -527,6 +648,9 @@ def restore_student(token: str, current_user: dict = Depends(get_current_user)):
                     conn.rollback()
                 except Exception:
                     pass
+                if file_trash_move and os.path.exists(file_trash_move[1]):
+                    os.makedirs(os.path.dirname(file_trash_move[0]), exist_ok=True)
+                    os.replace(file_trash_move[1], file_trash_move[0])
                 cur.close()
                 raise
             except Exception as e:
@@ -535,6 +659,9 @@ def restore_student(token: str, current_user: dict = Depends(get_current_user)):
                     conn.rollback()
                 except Exception:
                     pass
+                if file_trash_move and os.path.exists(file_trash_move[1]):
+                    os.makedirs(os.path.dirname(file_trash_move[0]), exist_ok=True)
+                    os.replace(file_trash_move[1], file_trash_move[0])
                 cur.close()
 
                 write_audit_log(
@@ -657,8 +784,8 @@ def get_activity(current_user: dict = Depends(get_current_user)):
             "success, created_at AS timestamp "
             "FROM audit_log "
             "WHERE action IN ('ADDED','UPDATED','DELETED','RESTORED','UPLOAD_SUCCESS','UPLOAD_FAILED',"
-            "'RESTORE_SUCCESS','RESTORE_FAILED','UNDO_SUCCESS','UNDO_FAILED','BACKUP_SUCCESS','BACKUP_FAILED',"
-            "'LOGIN_SUCCESS','LOGIN_FAILED','LOGOUT') "
+            "'FILE_DELETE','RESTORE_SUCCESS','RESTORE_FAILED','UNDO_SUCCESS','UNDO_FAILED',"
+            "'BACKUP_SUCCESS','BACKUP_FAILED','LOGIN_SUCCESS','LOGIN_FAILED','LOGOUT') "
             "ORDER BY created_at DESC LIMIT 30"
         )
         audit_events = cur.fetchall()
@@ -747,6 +874,11 @@ def get_activity(current_user: dict = Depends(get_current_user)):
         elif op == "UPDATE":
             updates.append(card)
         elif op == "IMPORT":
+            uploads.append(card)
+        elif op == "FILE_DELETE":
+            # Surface file deletions with undo from Activity (same stream as uploads)
+            card["description"] = card.get("description") or f"File deleted: {data.get('file_delete_filename', '')}"
+            card["filename"] = data.get("file_delete_filename")
             uploads.append(card)
         if raw_operation_type == "SEMESTER_UPDATE":
             semester_updates.append(card)

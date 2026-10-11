@@ -222,15 +222,15 @@ export default function PrintReport({ data, username, role, query }) {
                     const sem   = row.semester ?? 0;
                     const cgpaV = row.cgpa != null
                       ? parseFloat(row.cgpa).toFixed(2)
-                      : cgpaMap[key]?.[sem] ?? '—';
+                      : cgpaMap[key]?.[sem] ?? '';
                     return (
                       <tr key={i} style={{ background: i % 2 === 0 ? '#fff' : '#f0f4f8' }}>
                         <td style={{ ...TD, textAlign: 'center' }}>{i + 1}</td>
                         <td style={{ ...TD, textAlign: 'center', fontWeight: 600 }}>
-                          Semester {row.semester ?? '—'}
+                          Semester {row.semester ?? ''}
                         </td>
                         <td style={{ ...TD, textAlign: 'center', fontWeight: 700, color: '#1e40af' }}>
-                          {row.sgpa != null ? parseFloat(row.sgpa).toFixed(2) : '—'}
+                          {row.sgpa != null ? parseFloat(row.sgpa).toFixed(2) : ''}
                         </td>
                         <td style={{ ...TD, textAlign: 'center', fontWeight: 700, color: '#4338ca' }}>
                           {cgpaV}
@@ -271,14 +271,14 @@ export default function PrintReport({ data, username, role, query }) {
                   const sem   = row.semester ?? 0;
                   const cgpaV = row.cgpa != null
                     ? parseFloat(row.cgpa).toFixed(2)
-                    : cgpaMap[key]?.[sem] ?? '—';
+                    : cgpaMap[key]?.[sem] ?? '';
                   return (
                     <tr key={i} style={{ background: i % 2 === 0 ? '#fff' : '#f0f4f8' }}>
                       <td style={{ ...TD, textAlign: 'center' }}>{i + 1}</td>
-                      {data.some(r => r.usn)             && <td style={{ ...TD, fontFamily: 'monospace', fontSize: 8, whiteSpace: 'nowrap' }}>{row.usn || '—'}</td>}
-                      {data.some(r => r.name)            && <td style={{ ...TD, fontWeight: 600 }}>{row.name || '—'}</td>}
-                      {data.some(r => r.semester != null) && <td style={{ ...TD, textAlign: 'center' }}>{row.semester ?? '—'}</td>}
-                      {data.some(r => r.sgpa != null)    && <td style={{ ...TD, textAlign: 'center', fontWeight: 700, color: '#1e40af' }}>{row.sgpa != null ? parseFloat(row.sgpa).toFixed(2) : '—'}</td>}
+                      {data.some(r => r.usn)             && <td style={{ ...TD, fontFamily: 'monospace', fontSize: 8, whiteSpace: 'nowrap' }}>{row.usn || ''}</td>}
+                      {data.some(r => r.name)            && <td style={{ ...TD, fontWeight: 600 }}>{row.name || ''}</td>}
+                      {data.some(r => r.semester != null) && <td style={{ ...TD, textAlign: 'center' }}>{row.semester ?? ''}</td>}
+                      {data.some(r => r.sgpa != null)    && <td style={{ ...TD, textAlign: 'center', fontWeight: 700, color: '#1e40af' }}>{row.sgpa != null ? parseFloat(row.sgpa).toFixed(2) : ''}</td>}
                       <td style={{ ...TD, textAlign: 'center', fontWeight: 700, color: '#4338ca' }}>{cgpaV}</td>
                     </tr>
                   );
@@ -303,7 +303,7 @@ export default function PrintReport({ data, username, role, query }) {
                 {data.map((row, i) => (
                   <tr key={i} style={{ background: i % 2 === 0 ? '#fff' : '#f0f4f8' }}>
                     {flatHeaders.map(h => (
-                      <td key={h} style={TD}>{row[h] != null ? String(row[h]) : '—'}</td>
+                      <td key={h} style={TD}>{row[h] != null ? String(row[h]) : ''}</td>
                     ))}
                   </tr>
                 ))}

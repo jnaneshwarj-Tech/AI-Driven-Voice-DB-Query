@@ -329,6 +329,11 @@ _STOP_WORDS = {
     'what', 'who', 'which', 'where', 'when', 'how', 'is', 'are', 'was', 'were',
     'please', 'can', 'could', 'would', 'should', 'will', 'do', 'does', 'did',
     'information', 'info', 'about', 'regarding', 'related', 'to',
+    'academic', 'acadamic', 'academics', 'personal', 'full', 'complete', 'entire',
+    'profile', 'background', 'branch', 'department', 'dept', 'tell', 'want', 'needed',
+    'phone', 'mobile', 'email', 'contact', 'address', 'father', 'mother', 'dob',
+    'date', 'birth', 'blood', 'group', 'gender', 'caste', 'religion', 'village',
+    'region', 'taluk', 'district', 'state',
     '1', '2', '3', '4', '5', '6', '7', '8', '9', '10',
 }
 
@@ -342,12 +347,12 @@ def extract_search_term(natural_query: str) -> str | None:
     q = natural_query.strip()
 
     prep_patterns = [
-        r'\bof\s+([A-Za-z0-9][A-Za-z0-9 ]{1,40}?)(?:\s*$|\s+(?:in|from|with|and|cgpa|sgpa|marks|gpa|semester|sem\b|details|data|record))',
-        r'\bfor\s+([A-Za-z0-9][A-Za-z0-9 ]{1,40}?)(?:\s*$|\s+(?:in|from|with|and|cgpa|sgpa|marks|gpa|semester|sem\b))',
+        r'\bof\s+([A-Za-z0-9][A-Za-z0-9 ]{1,40}?)(?:\s*$|\s+(?:in|from|with|and|cgpa|sgpa|marks|gpa|semester|sem\b|details|data|record|branch))',
+        r'\bfor\s+([A-Za-z0-9][A-Za-z0-9 ]{1,40}?)(?:\s*$|\s+(?:in|from|with|and|cgpa|sgpa|marks|gpa|semester|sem\b|branch))',
         r'\bnamed?\s+([A-Za-z0-9][A-Za-z0-9 ]{1,40}?)(?:\s*$|\s+(?:in|from|with|and))',
         r'\bcalled\s+([A-Za-z0-9][A-Za-z0-9 ]{1,40}?)(?:\s*$|\s+(?:in|from|with|and))',
-        r'\bstudent\s+([A-Za-z0-9][A-Za-z0-9 ]{1,40}?)(?:\s*$|\s+(?:in|from|with|and|cgpa|sgpa|marks))',
-        r'\bshow\s+(?:me\s+)?(?:details?\s+of\s+|marks?\s+of\s+|gpa\s+of\s+|cgpa\s+of\s+|data\s+of\s+)?([A-Za-z0-9][A-Za-z0-9 ]{1,40}?)(?:\s*$|\s+(?:in|from|with|and|cgpa|sgpa|marks|gpa|semester|sem\b))',
+        r'\bstudent\s+([A-Za-z0-9][A-Za-z0-9 ]{1,40}?)(?:\s*$|\s+(?:in|from|with|and|cgpa|sgpa|marks|branch))',
+        r'\bshow\s+(?:me\s+)?(?:details?\s+of\s+|marks?\s+of\s+|gpa\s+of\s+|cgpa\s+of\s+|data\s+of\s+)?([A-Za-z0-9][A-Za-z0-9 ]{1,40}?)(?:\s*$|\s+(?:in|from|with|and|cgpa|sgpa|marks|gpa|semester|sem\b|branch))',
         r'\bgive\s+(?:me\s+)?(?:details?\s+of\s+|marks?\s+of\s+|gpa\s+of\s+)?([A-Za-z0-9][A-Za-z0-9 ]{1,40}?)(?:\s*$|\s+(?:in|from|with|and))',
         r'\bdisplay\s+(?:details?\s+of\s+|marks?\s+of\s+)?([A-Za-z0-9][A-Za-z0-9 ]{1,40}?)(?:\s*$|\s+(?:in|from|with|and))',
     ]
@@ -362,25 +367,35 @@ def extract_search_term(natural_query: str) -> str | None:
             if term.lower() not in _STOP_WORDS and len(term) >= 2:
                 return term
 
-    # USN pattern
-    usn_match = re.search(r'\b([A-Z0-9]{4,20})\b', q, re.IGNORECASE)
+    # USN pattern — must contain BOTH letters and numbers and be >= 6 chars (e.g. 4HG23CS032)
+    usn_match = re.search(r'\b(?=[A-Za-z0-9]*\d)(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{6,20}\b', q)
     if usn_match:
-        candidate = usn_match.group(1)
+        candidate = usn_match.group(0)
         if candidate.upper() not in _STOP_WORDS:
             return candidate
 
-    # Last meaningful word(s)
-    words = [w for w in q.split() if w.lower() not in _STOP_WORDS and len(w) >= 2]
-    if not words: return None
-    if len(words) == 1:
-        return words[0] if len(words[0]) >= 2 else None
-    last_two = words[-2:]
-    if all(w.isalpha() and w.lower() not in _STOP_WORDS for w in last_two):
-        combined = ' '.join(last_two)
-        if len(combined) <= 30:
-            return combined
-    last = words[-1]
-    return last if len(last) >= 2 else None
+    # Strip possessive suffix 's or s'
+    cleaned_q = re.sub(r"['’]s\b", '', q)
+
+    # Filter words against stop words, keeping single-letter initials (like 'J', 'R')
+    raw_tokens = re.findall(r'[A-Za-z0-9]+', cleaned_q)
+    meaningful = []
+    for tok in raw_tokens:
+        if tok.lower() in _STOP_WORDS:
+            continue
+        if tok.isdigit():
+            continue
+        meaningful.append(tok)
+
+    if not meaningful:
+        return None
+
+    # Reconstruct name preserving initials (e.g. "MANOJ J R")
+    # If the tokens form a plausible name (1 to 4 tokens), return combined
+    if len(meaningful) <= 4:
+        return ' '.join(meaningful)
+
+    return ' '.join(meaningful[:3])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -524,6 +539,17 @@ def get_student_profile(usn: str) -> dict | None:
 # Confidence thresholds
 # ─────────────────────────────────────────────────────────────────────────────
 
+def match_student(search_term: str, candidate_name: str) -> float:
+    """
+    Compute a similarity score 0.0–1.0 between a search term and a candidate
+    student name. Used by the ambiguity detector in routes_query.py.
+
+    Delegates to the internal 7-layer _score function so fuzzy behaviour is
+    consistent across the entire codebase.
+    """
+    return _score(search_term or '', candidate_name or '')
+
+
 THRESHOLD_AUTO_CORRECT = 0.95   # ≥95% → auto-correct silently
 THRESHOLD_PRIMARY      = 0.80   # 80–94% → "Did you mean?"
 THRESHOLD_POSSIBLE     = 0.55   # 55–79% → possible matches list
@@ -534,12 +560,81 @@ THRESHOLD_MINIMUM      = 0.55   # <55% → no suggestion (only on explicit submi
 # Smart fallback (called on 0 SQL results)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def fuzzy_search_father_names(father_name: str, limit: int = 8, min_score: float = 0.55) -> list[dict]:
+    """
+    Fuzzy-match father names using 7-layer NLP scoring.
+    Returns students whose father names match the search term.
+    """
+    if not father_name:
+        return []
+
+    term = father_name.strip().lower()
+    with db_conn() as conn:
+        cur = conn.cursor(dictionary=True)
+        cur.execute("SELECT usn, name, father_name FROM students WHERE father_name IS NOT NULL AND father_name != ''")
+        rows = cur.fetchall()
+        cur.close()
+
+    if not rows:
+        return []
+
+    scored = []
+    for s in rows:
+        father_score = _score(term, s['father_name'] or '')
+        if father_score >= min_score:
+            scored.append({**s, 'score': round(father_score, 4)})
+
+    scored.sort(key=lambda x: (-x['score'], x['name'] or ''))
+    return scored[:limit]
+
+
 def smart_fallback(natural_query: str) -> dict:
     """
     Called when SQL returns 0 results.
     Returns structured suggestion for the multi-choice interaction.
     Sprint 2: Multilingual (Kannada/English/Mixed) support.
     """
+    # Check if this is a father name query
+    father_match = re.search(
+        r"\b(?:father(?:['’]s)?|dad(?:['’]s)?)\s+name\b\s*(?:is|=|of)?\s*"
+        r"([A-Za-z][A-Za-z .'-]*?)"
+        r"(?=\s+(?:students?|from|in|with|and|or|list|show|who|aged?|age|branch|"
+        r"semester|current)\b|[?.!,;]|$)",
+        natural_query,
+        re.I,
+    )
+    
+    if father_match:
+        father_name = father_match.group(1).strip(" .'-")
+        if father_name:
+            # Try fuzzy search on father names
+            matches = fuzzy_search_father_names(father_name, limit=8, min_score=0.55)
+            if matches:
+                top_score = matches[0]['score']
+                if top_score >= THRESHOLD_PRIMARY:
+                    # Auto-correct if confidence is high
+                    top = matches[0]
+                    return {
+                        'type': 'auto_corrected',
+                        'search_term': father_name,
+                        'confidence': top_score,
+                        'auto_corrected': True,
+                        'message': f"Showing results for father name '{top['father_name']}' (similar to '{father_name}')",
+                        'top_match': top,
+                        'suggestions': matches,
+                    }
+                elif top_score >= THRESHOLD_POSSIBLE:
+                    # Show suggestions if confidence is moderate
+                    return {
+                        'type': 'possible_matches',
+                        'search_term': father_name,
+                        'confidence': top_score,
+                        'auto_corrected': False,
+                        'message': f"Did you mean father name '{matches[0]['father_name']}'?",
+                        'top_match': matches[0],
+                        'suggestions': matches,
+                    }
+    
     # Sprint 2: Try multilingual term extraction first
     try:
         from kannada_processor import extract_search_term_multilingual, detect_language
@@ -580,8 +675,18 @@ def smart_fallback(natural_query: str) -> dict:
         key = (m['name'] or '').upper().strip()
         same_name_groups.setdefault(key, []).append(m)
 
-    top_name = (matches[0]['name'] or '').upper().strip()
-    has_duplicates = len(same_name_groups.get(top_name, [])) > 1
+    # Check if there is an exact name match with the search term
+    exact_candidates = [m for m in matches if (m['name'] or '').upper().strip() == term.upper().strip()]
+    if len(exact_candidates) == 1:
+        # Unique exact match exists!
+        top_name = (exact_candidates[0]['name'] or '').upper().strip()
+        has_duplicates = False
+        top_score = 1.0
+        # Re-order matches so exact candidate is first
+        matches = exact_candidates + [m for m in matches if m['usn'] != exact_candidates[0]['usn']]
+    else:
+        top_name = (matches[0]['name'] or '').upper().strip()
+        has_duplicates = len(same_name_groups.get(top_name, [])) > 1
 
     # Fetch data for top candidates
     suggestions = []

@@ -98,22 +98,21 @@ def parse_usn_full(usn: str) -> Optional[Dict[str, Any]]:
     else:  # Jan-June = still in previous academic year
         years_since_admission = current_calendar_year - admission_batch - 1
     
-    # Calculate current semester
-    # For lateral entry, they start from semester 3 (2nd year)
-    if is_lateral:
-        # Lateral: starts at sem 3, duration is 6 semesters (3-8)
-        base_semester = 3
-        if current_month >= 7:  # Odd semester
-            calc_sem = base_semester + (years_since_admission * 2)
-        else:  # Even semester
-            calc_sem = base_semester + (years_since_admission * 2) - 1
-    else:
-        # Regular: starts at sem 1, duration is 8 semesters (1-8)
-        if current_month >= 7:  # Odd semester
-            calc_sem = (years_since_admission * 2) + 1
-        else:  # Even semester
-            calc_sem = years_since_admission * 2
-    
+    # Calculate current semester from actual academic progression.
+    #
+    # A lateral-entry student joins the 2nd year (semester 3) of the normal batch
+    # identified by `admission_batch` (= usn_year - 1) and thereafter progresses in
+    # lockstep with that batch. A regular student starts at semester 1 of the same
+    # `admission_batch`. Because `admission_batch` is already corrected for lateral
+    # entry, BOTH types share one authoritative timeline keyed on that batch — the
+    # lateral's current semester always equals its associated normal batch's current
+    # semester. Do NOT add a separate base-semester offset for laterals; doing so
+    # double-counts the years already elapsed since the (corrected) admission batch.
+    if current_month >= 7:  # Odd semester (Jul-Dec)
+        calc_sem = (years_since_admission * 2) + 1
+    else:  # Even semester (Jan-Jun)
+        calc_sem = years_since_admission * 2
+
     # Clamp semester to valid range
     calc_sem = max(1, min(8, calc_sem))
     

@@ -253,10 +253,20 @@ class TestSprint1DatabaseReliability(unittest.TestCase):
         self.assertEqual(cgpa_req["operation"], "update")
         self.assertIn("cgpa", cgpa_req["executions"][0]["sql"])
 
-        emergency_req = _build_update_request("update 4HG23CS032 emergency contact number to 9876543210")
-        self.assertEqual(emergency_req["operation"], "update")
-        self.assertEqual(emergency_req["executions"][0]["sql"], "UPDATE students SET `emergency_contact_number`=%s WHERE usn=%s")
-        self.assertTrue(emergency_req["column_creations"])
+        from unittest.mock import patch
+        
+        with patch('routes_query._load_table_columns') as mock_load:
+            # Mock table columns to simulate 'emergency_contact_number' missing
+            def mock_load_impl(conn, table):
+                if table == 'students':
+                    return {'usn': 'varchar', 'name': 'varchar'} # missing emergency contact
+                return {}
+            mock_load.side_effect = mock_load_impl
+            
+            emergency_req = _build_update_request("update 4HG23CS032 emergency contact number to 9876543210")
+            self.assertEqual(emergency_req["operation"], "update")
+            self.assertEqual(emergency_req["executions"][0]["sql"], "UPDATE students SET `emergency_contact_number`=%s WHERE usn=%s")
+            self.assertTrue(emergency_req["column_creations"])
         self.assertEqual(emergency_req["column_creations"][0]["column"], "emergency_contact_number")
 
         sem_req = _build_update_request("update 4HG23CS032 sem 5 sgpa to 8.5")

@@ -91,6 +91,7 @@ SYNONYM_REGISTRY: dict[str, list[str]] = {
         "dept", "dept_name", "stream", "stream_name",
         "program", "program_branch", "course",
         "branch_department", "programme", "engineering_branch",
+        "course_name", "course_branch", "study_branch",
     ],
 
     "division": [
@@ -130,6 +131,18 @@ SYNONYM_REGISTRY: dict[str, list[str]] = {
         "parent_mother_name",
     ],
 
+    "father_occupation": [
+        "father_occupation", "fathers_occupation", "father_s_occupation",
+        "father_job", "father_profession", "father_work",
+        "father_s_job", "father_s_work",
+    ],
+
+    "mother_occupation": [
+        "mother_occupation", "mothers_occupation", "mother_s_occupation",
+        "mother_job", "mother_profession", "mother_work",
+        "mother_s_job", "mother_s_work",
+    ],
+
     "guardian_name": [
         "guardian_name", "guardian", "parent_name", "parent_guardian_name",
     ],
@@ -153,6 +166,12 @@ SYNONYM_REGISTRY: dict[str, list[str]] = {
 
     "gender": ["gender", "sex"],
 
+    "student_type": [
+        "student_type", "student type", "admission_type", "entry_type",
+        "lateral", "lateral_entry", "lateral entry", "le", "direct second year",
+        "direct 2nd year",
+    ],
+
     "religion": ["religion", "faith"],
 
     "caste": ["caste", "caste_category", "caste_name"],
@@ -169,6 +188,9 @@ SYNONYM_REGISTRY: dict[str, list[str]] = {
     ],
     "village": [
         "village", "native_village", "village_name", "hamlet",
+        "gram", "grama", "native_place", "native", "native_gram",
+        "village_town", "village_or_town",
+        "place", "place_name", "student_place", "home_place",
     ],
     "taluk": [
         "taluk", "taluka", "tehsil", "sub_district", "subdistrict", "taluk_name", "tahsil", "mandal",
@@ -180,9 +202,27 @@ SYNONYM_REGISTRY: dict[str, list[str]] = {
         "state", "state_name", "province", "country_state", "state_name_1",
     ],
     "region": [
-        "region", "region_type", "region_category", "region_rural_urban",
-        "area_type", "residence_type", "location_type",
-        "rural_urban", "urban_rural", "rural_or_urban", "student_region",
+        "region", "residential_region", "district_region", "geographic_region",
+        "location_region", "student_region", "geographic_area", "home_region",
+    ],
+
+    # area_type stores RURAL / URBAN classification
+    "area_type": [
+        "area_type", "rural_urban", "urban_rural", "rural_or_urban",
+        "residence_type", "location_type", "region_type", "region_category",
+        "region_rural_urban", "area_classification", "rural", "urban",
+        "student_area_type", "residential_type", "locality_type",
+        "area_category", "village_city", "village_or_city",
+        "rural_urban_classification", "rur_urb",
+        # Google Form field "Reason" contains Rural/Urban value
+        "reason",
+    ],
+
+    # area = geographic locality (city/district/area name)
+    "area": [
+        "area", "locality", "local_area", "residential_area",
+        "area_name", "location", "location_name", "city", "town",
+        "city_town", "urban_area", "local_region",
     ],
 
     "permanent_address": [
@@ -199,8 +239,11 @@ SYNONYM_REGISTRY: dict[str, list[str]] = {
 
     "emergency_contact_number": [
         "emergency_contact_number", "emergency_contact", "emergency_contact_no",
-        "emergency_contact_no", "emergency_phone", "emergency_phone_number",
-        "emergency phone", "emergency phone number",
+        "emergency_phone", "emergency_phone_number", "emergency_number",
+        "emergency_mobile", "emergency_mobile_number", "emergency phone",
+        "emergency phone number", "emergency_contact_mobile",
+        "emergency_contact_person", "kin_contact", "guardian_contact",
+        "parent_emergency_contact", "emergency",
     ],
 
     "email": [
@@ -214,7 +257,7 @@ SYNONYM_REGISTRY: dict[str, list[str]] = {
         "student_aadhar_no", "aadhar_card_no", "uid",
     ],
 
-    "status": ["status", "student_status", "enrollment_status"],
+    "status": ["status", "student_status", "enrollment_status", "admission_status"],
 
     "current_year": [
         "current_year", "year", "academic_year", "study_year", "year_of_study",
@@ -227,7 +270,191 @@ SYNONYM_REGISTRY: dict[str, list[str]] = {
     "source_file": [
         "source_file", "file_name", "imported_from",
     ],
+
+    # ── New Google Form fields (2024 batch) ───────────────────────────────────
+
+    "father_occupation": [
+        "father_occupation", "father_s_occupation", "fathers_occupation",
+        "father_job", "fathers_job", "father_profession",
+        "father_s_profession", "fathers_profession",
+        "paternal_occupation", "parent_father_occupation",
+        "father_occupation_detail", "occupation_of_father",
+    ],
+
+    "mother_occupation": [
+        "mother_occupation", "mother_s_occupation", "mothers_occupation",
+        "mother_job", "mothers_job", "mother_profession",
+        "mother_s_profession", "mothers_profession",
+        "maternal_occupation", "parent_mother_occupation",
+        "mother_occupation_detail", "occupation_of_mother",
+    ],
+
+    "parents_phone": [
+        "parents_phone", "parents_phone_number", "parent_phone",
+        "parent_mobile", "parents_mobile", "parents_mobile_number",
+        "parents_mobile_no", "parents_contact",
+        "parent_contact_number", "family_phone", "guardian_phone",
+        "parent_phone_no", "parents_phone_no", "parents_number",
+        "parents_contact_number", "guardian_contact_number", "guardians_phone",
+        "guardians_contact_number", "guardian_mobile", "guardian_phone_no",
+        "abhibhataka_mahati",
+    ],
+
+    # Mother / father SPECIFIC contact numbers. Registered separately so a file
+    # that carries a mother-only column is preferred over the general parent
+    # contact during smart search (see intent_fields.resolve_contact).
+    "mother_phone": [
+        "mother_phone", "mother_s_phone", "mothers_phone", "mother_phone_number",
+        "mother_mobile", "mother_s_mobile", "mothers_mobile", "mother_mobile_number",
+        "mother_contact", "mother_contact_number", "mothers_contact_number",
+        "mother_number", "mother_s_number", "mothers_number", "tayi_mahati",
+        "thaye_phone", "ತಾಯಿ_ದೂರವಾಣಿ",
+    ],
+
+    "father_phone": [
+        "father_phone", "father_s_phone", "fathers_phone", "father_phone_number",
+        "father_mobile", "father_s_mobile", "fathers_mobile", "father_mobile_number",
+        "father_contact", "father_contact_number", "fathers_contact_number",
+        "father_number", "father_s_number", "fathers_number", "tande_mahati",
+        "thande_phone", "ತಂದೆ_ದೂರವಾಣಿ",
+    ],
+
+    "hk_status": [
+        "hk_status", "hk_non_hk", "hk", "non_hk",
+        "hyd_karnataka", "hyderabad_karnataka", "hk_region",
+        "hk_quota", "hk_category", "hk_non_hk_status",
+    ],
+
+    "quota": [
+        "quota", "reservation_details", "quota_reservation_details",
+        "quota_reservation", "reservation", "reservation_category_details",
+        "admission_quota", "quota_type", "quota_details",
+    ],
+
+    "distance_from_college": [
+        "distance_from_college", "distance", "distance_km",
+        "distance_from_home_to_college_km", "distance_from_home",
+        "home_college_distance", "distance_home_college",
+        "distance_from_home_to_college",
+    ],
+
+    "kannada_medium": [
+        "kannada_medium", "medium", "medium_of_instruction",
+        "school_medium", "kannada_medium_school",
+        "medium_kannada", "kannada_school",
+    ],
+
+    "physically_handicapped": [
+        "physically_handicapped", "handicapped", "disabled",
+        "physical_disability", "disability_status", "ph_status",
+        "specially_abled", "ph", "physically_challenged",
+    ],
+
+    "pin_code": [
+        "pin_code", "pincode", "postal_code", "zip_code",
+        "zip", "pin", "postal_pin", "pin_no",
+    ],
+
+    "post_office": [
+        "post_office", "post", "po", "postal_office",
+        "post_office_name", "nearest_post_office",
+    ],
+
+    "backlogs": [
+        "backlogs", "backlog", "arrears", "pending_subjects",
+        "failed_subjects", "backlog_details", "subject_backlogs",
+        "pending_exams", "backlogs_required_format",
+        "backlog_subjects", "failed_papers",
+        # Google Form long header normalizes to this
+        "backlogs_required_format_subject_semester_year",
+        "backlogs_required_format_subject_semester",
+        "backlog_subject_semester_year",
+    ],
+
+    "snq_quota": [
+        "snq_quota", "snq", "sports_news_quota",
+        "snq_quota_status", "special_quota",
+    ],
+
+    # ── Fee fields (map all VTU/PD/IDP variations to canonical names) ─────────
+
+    "fee_vtu_1": [
+        "fee_vtu_1", "vtu_fees_1st_year", "vtu_fee_year1",
+        "vtu_fees_1", "vtu_1st_year", "vtu_fees_year_1",
+        "vtu_fees_1st",
+    ],
+    "fee_vtu_2": [
+        "fee_vtu_2", "vtu_fees_2nd_year", "vtu_fee_year2",
+        "vtu_fees_2", "vtu_2nd_year", "vtu_fees_year_2",
+    ],
+    "fee_vtu_3": [
+        "fee_vtu_3", "vtu_fees_3rd_year", "vtu_fee_year3",
+        "vtu_fees_3", "vtu_3rd_year", "vtu_fees_year_3",
+    ],
+    "fee_vtu_4": [
+        "fee_vtu_4", "vtu_fees_4th_year", "vtu_fee_year4",
+        "vtu_fees_4", "vtu_4th_year", "vtu_fees_year_4",
+        "vtu_fees_4th",
+    ],
+    "fee_pd_1": [
+        "fee_pd_1", "pd_fees_1st_year", "pd_fee_year1",
+        "pd_fees_1", "pd_1st_year", "pd_fees_year_1",
+    ],
+    "fee_pd_2": [
+        "fee_pd_2", "pd_fees_2nd_year", "pd_fee_year2",
+        "pd_fees_2", "pd_2nd_year", "pd_fees_year_2",
+    ],
+    "fee_pd_3": [
+        "fee_pd_3", "pd_fees_3rd_year", "pd_fee_year3",
+        "pd_fees_3", "pd_3rd_year", "pd_fees_year_3",
+    ],
+    "fee_pd_4": [
+        "fee_pd_4", "pd_fees_4th_year", "pd_fee_year4",
+        "pd_fees_4", "pd_4th_year", "pd_fees_year_4",
+    ],
+    "fee_idp_1": [
+        "fee_idp_1", "idp_tuition_fees_1st_year", "idp_1st_year",
+        "idp_fees_1", "idp_fee_year1",
+        "idp_tuition_fees_if_you_partially_paid_enter_your_amount_details_below_1st_year",
+    ],
+    "fee_idp_2": [
+        "fee_idp_2", "idp_tuition_fees_2nd_year", "idp_2nd_year",
+        "idp_fees_2", "idp_fee_year2",
+        "idp_tuition_fees_if_you_partially_paid_enter_your_amount_details_below_2nd_year",
+    ],
+    "fee_idp_3": [
+        "fee_idp_3", "idp_tuition_fees_3rd_year", "idp_3rd_year",
+        "idp_fees_3", "idp_fee_year3",
+        "idp_tuition_fees_if_you_partially_paid_enter_your_amount_details_below_3rd_year",
+    ],
+    "fee_idp_4": [
+        "fee_idp_4", "idp_tuition_fees_4th_year", "idp_4th_year",
+        "idp_fees_4", "idp_fee_year4",
+        "idp_tuition_fees_if_you_partially_paid_enter_your_amount_details_below_4th_year",
+        "idp_tuition_fees_if_your_are_not_paid_or_partially_paid_please_select_option_correctly_4th_year",
+    ],
+    "fee_tuition_paid": [
+        "fee_tuition_paid", "tuition_fees_already_paid",
+        "tuition_fess_already_paid",
+        "tuition_fees_paid", "tuition_paid",
+        # Google Form long header
+        "tuition_fees_already_paid_it_is_applicable_for_partially_paid_students",
+        "tuition_fees_already_paid_applicable_for_partially_paid_students",
+        "tuition_already_paid",
+    ],
+    "fee_tuition_remaining": [
+        "fee_tuition_remaining", "tuition_fess_remaining_amount",
+        "tuition_fees_remaining_amount", "tuition_remaining",
+        "remaining_fee", "fee_remaining",
+    ],
+
+    # ── CGPA alias (for "Overall CGPA" column header in forms) ──────────────
+    "overall_cgpa": [
+        "overall_cgpa", "cgpa_overall", "final_cgpa",
+        "cumulative_cgpa", "total_cgpa",
+    ],
 }
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION 3: CONTEXT-AWARE RULES (whole-header token logic)
@@ -236,6 +463,18 @@ SYNONYM_REGISTRY: dict[str, list[str]] = {
 
 # (token_prefix_tuple, canonical) — checked against normalized header tokens
 _CONTEXT_RULES: list[tuple[tuple[str, ...], str]] = [
+    # --- occupation rules must come BEFORE bare father/mother so they win ---
+    (('father', 'occupation'), 'father_occupation'),
+    (('fathers', 'occupation'), 'father_occupation'),
+    (('father', 'job'), 'father_occupation'),
+    (('father', 'profession'), 'father_occupation'),
+    (('father', 'work'), 'father_occupation'),
+    (('mother', 'occupation'), 'mother_occupation'),
+    (('mothers', 'occupation'), 'mother_occupation'),
+    (('mother', 'job'), 'mother_occupation'),
+    (('mother', 'profession'), 'mother_occupation'),
+    (('mother', 'work'), 'mother_occupation'),
+    # --- generic parent/guardian name rules ---
     (('father',), 'father_name'),
     (('fathers',), 'father_name'),
     (('mother',), 'mother_name'),
@@ -254,12 +493,21 @@ _CONTEXT_RULES: list[tuple[tuple[str, ...], str]] = [
     (('candidate', 'name'), 'name'),
 ]
 
+# Tokens that indicate the field is NOT just a name
+_NON_NAME_TOKENS = frozenset({'occupation', 'job', 'profession', 'work', 'phone', 'number', 'contact'})
+
 
 def _context_match(norm: str) -> str | None:
     """Match complete-header context. Never maps solely because 'name' is a substring."""
     tokens = [t for t in norm.split('_') if t]
     if not tokens:
         return None
+
+    # Backlog/arrears columns arrive with long Google-Form prompts such as
+    # "Backlogs (Required Formate: Subject, semester, year ...)". Any header
+    # carrying a backlog token is the canonical backlogs field.
+    if {'backlog', 'backlogs', 'arrears'} & set(tokens):
+        return 'backlogs'
 
     # Bare "name" only
     if tokens == ['name']:
@@ -280,9 +528,11 @@ def _context_match(norm: str) -> str | None:
                 'branch', 'department', 'dept', 'stream', 'division',
                 'section', 'domain', 'specialization',
             ):
-                # branch / father / etc. with any trailing tokens
-                best = canon
-                best_len = plen
+                # Only map to the generic name if there are no non-name tokens
+                token_set = set(tokens)
+                if not token_set.intersection(_NON_NAME_TOKENS):
+                    best = canon
+                    best_len = plen
     return best
 
 
@@ -419,9 +669,6 @@ def map_column(raw: str) -> tuple[str, str, float, list[dict]]:
     mapping_type: exact|synonym|wide_sem|context|fuzzy|passthrough|ambiguous
     """
     norm = normalize_header(raw)
-
-    if re.search(r'(^|_)(region|rural_urban|urban_rural|area_type|residence_type|location_type)(_|$)', norm):
-        return 'region', 'context', 0.95, []
 
     # 1. Wide-format semester pattern (before synonym so sgpa_sem3 ≠ semester)
     wide = parse_wide_sem_col(norm)
@@ -619,36 +866,104 @@ _FIELD_LABELS = {
     'name': 'Student Name',
 }
 
+_VALID_BLOOD_GROUPS = {
+    'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'
+}
+
+
+def validate_field_value(field: str, value) -> tuple[bool, str | None]:
+    """Validate a single field without rejecting the whole student row."""
+    if _is_empty(value):
+        return True, None
+
+    raw = str(value).strip()
+    normalized_field = field.lower().strip()
+    if normalized_field in {'usn'}:
+        return _USN_VALUE_RE.fullmatch(raw) is not None, f"USN {raw!r} is invalid."
+    if normalized_field in {'email'}:
+        return _EMAIL_VALUE_RE.fullmatch(raw) is not None, f"Email {raw!r} is invalid."
+    if normalized_field in {'branch'}:
+        return raw.upper() in _VALID_BRANCHES, f"Branch {raw!r} is invalid."
+    if normalized_field in {'blood_group'}:
+        return raw.upper() in _VALID_BLOOD_GROUPS, f"Blood group {raw!r} is invalid."
+    if normalized_field in {'phone', 'emergency_contact_number'}:
+        digits = re.sub(r'\D', '', raw)
+        return len(digits) >= 10 and len(digits) <= 15, f"Phone {raw!r} is invalid."
+    if normalized_field in {'dob'}:
+        try:
+            import pandas as pd
+            pd.to_datetime(raw, dayfirst=True)
+            return True, None
+        except Exception:
+            return False, f"DOB {raw!r} is invalid."
+    if normalized_field in {'semester', 'current_sem'}:
+        try:
+            sem = int(float(raw))
+            return 1 <= sem <= 12, f"Semester {raw!r} is invalid; expected 1-12."
+        except (TypeError, ValueError):
+            return False, f"Semester {raw!r} is invalid; expected 1-12."
+    if normalized_field in {'sgpa', 'cgpa'}:
+        err = validate_sgpa_value(raw)
+        return err is None, err
+    if normalized_field in {'year_of_joining', 'admission_year', 'current_year'}:
+        try:
+            year = int(float(raw))
+            return 2000 <= year <= datetime.now().year + 1, f"{field.replace('_', ' ').title()} {raw!r} is invalid."
+        except (TypeError, ValueError):
+            return False, f"{field.replace('_', ' ').title()} {raw!r} is invalid."
+    if normalized_field.endswith('_sgpa') or normalized_field.endswith('_cgpa'):
+        err = validate_sgpa_value(raw)
+        return err is None, err
+    return True, None
+
+
+def sanitize_row_fields(row: dict) -> tuple[dict, dict[str, str]]:
+    """Return a row with invalid field values cleared and a per-field error report."""
+    cleaned = dict(row)
+    issues: dict[str, str] = {}
+
+    for field, value in list(cleaned.items()):
+        if _is_empty(value):
+            cleaned[field] = None
+            continue
+        if re.fullmatch(r'sem_\d+_(sgpa|cgpa)', str(field)):
+            ok, err = validate_field_value(field, value)
+        else:
+            ok, err = validate_field_value(field, value)
+        if not ok:
+            cleaned[field] = None
+            issues[field] = err or f"Field {field} is invalid."
+
+    return cleaned, issues
+
 
 def validate_mapped_rows(
     mapped_records: list[dict], *, allow_academic_only_usns: set[str] | None = None
 ) -> dict:
     """
-    Per-row required-field validation. Does not mutate input.
-    Invalid rows are returned with reasons — caller decides policy.
+    Validate identity-critical fields at the row level while treating non-critical
+    field errors as per-field issues that do not invalidate the whole student.
     """
     valid, invalid, errors = [], [], []
     allow_academic_only_usns = allow_academic_only_usns or set()
 
     for idx, row in enumerate(mapped_records, start=1):
+        cleaned_row, field_issues = sanitize_row_fields(row)
         row_errors = []
         available_cols = list(row.keys())
-        row_usn = '' if _is_empty(row.get('usn')) else str(row.get('usn')).strip()
+        row_usn = '' if _is_empty(cleaned_row.get('usn')) else str(cleaned_row.get('usn')).strip()
         has_academic_data = (
-            not _is_empty(row.get('sgpa'))
+            not _is_empty(cleaned_row.get('sgpa'))
             or any(
                 re.fullmatch(r'sem_\d+_(sgpa|cgpa)', str(field)) and not _is_empty(value)
-                for field, value in row.items()
+                for field, value in cleaned_row.items()
             )
         )
+
         for field in REQUIRED_FIELDS:
-            if (
-                field == 'name'
-                and row_usn in allow_academic_only_usns
-                and has_academic_data
-            ):
+            if field == 'name' and row_usn in allow_academic_only_usns and has_academic_data:
                 continue
-            val = row.get(field)
+            val = cleaned_row.get(field)
             if _is_empty(val):
                 label = _FIELD_LABELS.get(field, field)
                 row_errors.append(
@@ -656,52 +971,10 @@ def validate_mapped_rows(
                     f"Available columns: {available_cols}."
                 )
 
-        usn = row.get('usn')
+        usn = cleaned_row.get('usn')
         if not _is_empty(usn) and not _USN_VALUE_RE.fullmatch(str(usn).strip()):
             row_errors.append(f"Row {idx}: USN {str(usn).strip()!r} is invalid.")
 
-        email = row.get('email')
-        if not _is_empty(email) and not _EMAIL_VALUE_RE.fullmatch(str(email).strip()):
-            row_errors.append(f"Row {idx}: Email {str(email).strip()!r} is invalid.")
-
-        branch = row.get('branch')
-        if not _is_empty(branch) and str(branch).strip().upper() not in _VALID_BRANCHES:
-            row_errors.append(f"Row {idx}: Branch {str(branch).strip()!r} is invalid.")
-
-        for field in ('year_of_joining', 'admission_year'):
-            value = row.get(field)
-            if _is_empty(value):
-                continue
-            try:
-                year = int(float(value))
-                if year < 2000 or year > datetime.now().year + 1:
-                    raise ValueError
-            except (TypeError, ValueError):
-                row_errors.append(f"Row {idx}: {field.replace('_', ' ').title()} {value!r} is invalid.")
-
-        # A long-format SGPA always needs its semester. Wide columns carry the
-        # semester in their key, so validate each populated value directly.
-        semester = row.get('semester')
-        sgpa = row.get('sgpa')
-        if not _is_empty(sgpa) and _is_empty(semester):
-            row_errors.append(f"Row {idx}: Semester is required when SGPA is provided.")
-        if not _is_empty(semester):
-            try:
-                semester_number = int(float(semester))
-                if semester_number < 1 or semester_number > 12:
-                    raise ValueError
-            except (TypeError, ValueError):
-                row_errors.append(f"Row {idx}: Semester {semester!r} is invalid; expected 1-12.")
-
-        if not _is_empty(sgpa):
-            error = validate_sgpa_value(sgpa)
-            if error:
-                row_errors.append(f"Row {idx}: {error}.")
-        for field, value in row.items():
-            if re.fullmatch(r'sem_\d+_sgpa', str(field)) and not _is_empty(value):
-                error = validate_sgpa_value(value)
-                if error:
-                    row_errors.append(f"Row {idx}: {field} {error}.")
         if row_errors:
             invalid.append({
                 'row_index': idx,
@@ -710,14 +983,16 @@ def validate_mapped_rows(
                 'usn': None if _is_empty(row.get('usn')) else str(row.get('usn')).strip(),
                 'name': None if _is_empty(row.get('name')) else str(row.get('name')).strip(),
                 'problematic_fields': [
-                    f for f in REQUIRED_FIELDS if _is_empty(row.get(f))
+                    f for f in REQUIRED_FIELDS if _is_empty(cleaned_row.get(f))
                 ],
+                'field_issues': field_issues,
             })
             errors.extend(row_errors)
         else:
-            valid.append(row)
+            cleaned_row['_field_issues'] = field_issues
+            valid.append(cleaned_row)
 
-    return {'valid': valid, 'invalid': invalid, 'errors': errors}
+    return {'valid': valid, 'invalid': invalid, 'errors': errors, 'field_issues': {}}
 
 
 def validate_sgpa_value(sgpa) -> str | None:

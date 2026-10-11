@@ -19,6 +19,7 @@ from canonical_fields import (
     extract_marks_from_row,
     _is_empty,
 )
+from address_parser import normalize_area_type
 
 _USN_HEADERS = {
     'usn', 'student_id', 'student_usn', 'roll_no', 'roll_number',
@@ -215,6 +216,40 @@ def _build_gpa_data(mapped_records: list[dict]) -> list[dict]:
     return rows
 
 
+def _refine_mapping_by_values(records: list[dict], col_mapping: dict[str, str]) -> dict[str, str]:
+    """Value-aware refinement of the header-only mapping.
+
+    A column literally named "Region" often carries the Rural/Urban classifier
+    rather than a geographic region name. Header synonyms cannot tell the two
+    apart, so inspect sample values: when a column mapped to ``region`` holds
+    predominantly RURAL/URBAN values (and nothing else already claims
+    ``area_type``), route it to ``area_type`` so rural/urban queries work.
+    """
+    if not records:
+        return col_mapping
+
+    has_area_type = any(v == 'area_type' for v in col_mapping.values())
+    if has_area_type:
+        return col_mapping
+
+    region_cols = [raw for raw, canon in col_mapping.items() if canon == 'region']
+    if not region_cols:
+        return col_mapping
+
+    sample = records[:50]
+    for raw in region_cols:
+        vals = [r.get(raw) for r in sample if not _is_empty(r.get(raw))]
+        if not vals:
+            continue
+        classified = sum(1 for v in vals if normalize_area_type(str(v)) is not None)
+        if classified / len(vals) >= 0.6:
+            col_mapping = dict(col_mapping)
+            col_mapping[raw] = 'area_type'
+            break
+
+    return col_mapping
+
+
 def parse_file(filename: str, content: bytes) -> dict:
     """
     Main entry point.
@@ -264,6 +299,16 @@ def parse_file(filename: str, content: bytes) -> dict:
     raw_cols = list(records[0].keys())
     mapping_report = map_columns_detailed(raw_cols)
     col_mapping = mapping_report['mapping']
+    refined_mapping = _refine_mapping_by_values(records, col_mapping)
+    if refined_mapping is not col_mapping:
+        col_mapping = refined_mapping
+        mapping_report['mapping'] = col_mapping
+        for detail in mapping_report.get('details', []):
+            canon = col_mapping.get(detail.get('uploaded_column'))
+            if canon and canon != detail.get('canonical_field'):
+                detail['canonical_field'] = canon
+                detail['mapping_type'] = 'value_inferred'
+                detail['confidence'] = 0.9
     mapped_records = apply_mapping(records, col_mapping)
 
     fmt = detect_file_format(col_mapping)
@@ -288,7 +333,7 @@ def parse_file(filename: str, content: bytes) -> dict:
         if key not in seen_students:
             seen_students[key] = {
                 k: v for k, v in row.items()
-                if k not in ('semester', 'sgpa', 'cgpa')
+                if k not in ('semester', 'sgpa')
                 and not re.match(r'^sem_\d+_(sgpa|cgpa)$', str(k))
             }
 
