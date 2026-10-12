@@ -52,7 +52,7 @@ function formatErrorDetail(detail, fallback = 'Operation failed.') {
   return String(detail);
 }
 
-export default function FileExplorer({ onDataLoaded, canManageFiles = false }) {
+export default function FileExplorer({ onDataLoaded, canManageFiles = false, refreshVersion = 0 }) {
   const [files, setFiles] = useState([]);
   const [trashFiles, setTrashFiles] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -93,7 +93,9 @@ export default function FileExplorer({ onDataLoaded, canManageFiles = false }) {
   useEffect(() => {
     fetchFiles();
     if (canManageFiles) fetchTrash();
-  }, [canManageFiles]);
+    // An undo run from the operation modal changes a file's real state; the
+    // card must not keep claiming 'Imported' until the tab is reopened.
+  }, [canManageFiles, refreshVersion]);
 
   const handleUpload = async (e) => {
     const file = e.target.files?.[0];
@@ -236,6 +238,9 @@ export default function FileExplorer({ onDataLoaded, canManageFiles = false }) {
   };
 
   const pendingCount = files.filter(f => f.db_status === 'pending').length;
+  // Only a pending file whose parsed rows are still held by the server can be
+  // imported; counting the rest would offer an "Update All (3)" that does nothing.
+  const importableCount = files.filter(f => f.db_status === 'pending' && !f.cache_expired).length;
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
@@ -270,7 +275,7 @@ export default function FileExplorer({ onDataLoaded, canManageFiles = false }) {
           <button onClick={fetchFiles} className="p-1.5 hover:bg-slate-200 rounded-lg transition-colors" title="Refresh">
             <RefreshCw className={`w-3.5 h-3.5 text-slate-500 ${loading ? 'animate-spin' : ''}`} />
           </button>
-          {pendingCount > 0 && (
+          {importableCount > 0 && (
             <button
               onClick={async () => {
                 const pendings = files.filter(f => f.db_status === 'pending' && !f.cache_expired);
@@ -280,7 +285,7 @@ export default function FileExplorer({ onDataLoaded, canManageFiles = false }) {
               className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-50"
             >
               <Database className="w-3.5 h-3.5" />
-              {updatingDb ? 'Updating...' : `Update All (${pendingCount})`}
+              {updatingDb ? 'Updating...' : `Update All (${importableCount})`}
             </button>
           )}
           <button
@@ -416,7 +421,7 @@ export default function FileExplorer({ onDataLoaded, canManageFiles = false }) {
                           )}
                           {isCacheExpired && (
                             <p className="text-[10px] text-red-500 mt-1">
-                              Server was restarted. Please re-upload this file and import it again.
+                              This file's data is no longer in the database. Please re-upload it and import it again.
                             </p>
                           )}
                         </div>

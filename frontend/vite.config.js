@@ -10,11 +10,13 @@ export default defineConfig({
   plugins: [react()],
   server: {
     host: true,
-    port: 5173,
+    port: Number(process.env.VITE_PORT || 5173),
     strictPort: true,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8000',
+        // A staging/QA session runs its own backend on another port; the app
+        // itself never changes.
+        target: process.env.VITE_PROXY_TARGET || 'http://127.0.0.1:8000',
         changeOrigin: true,
       },
     },

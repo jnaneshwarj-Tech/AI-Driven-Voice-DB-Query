@@ -216,6 +216,125 @@ def _lifecycle_history_rows(st: dict) -> list[dict]:
     return (st.get("lifecycle") or {}).get("history") or []
 
 
+# ── Unicode (Kannada) text in PDF ─────────────────────────────────────────────
+# Helvetica is a Latin-only built-in: reportlab encodes it as cp1252/WinAnsi and
+# silently substitutes a fallback glyph for anything outside that. A Kannada
+# student's printed report therefore read "Name: nnnn nnnnnn" — a wrong name on
+# an official document, with no warning. So the PDF looks for a face that really
+# carries Kannada glyphs and uses it for *values*; headings and column labels
+# stay on Helvetica so the typography does not change for English text.
+_KANNADA_CANDIDATES = (
+    ("NirmalaUI", "C:/Windows/Fonts/Nirmala.ttc", 0),
+    ("NirmalaUI", "/usr/share/fonts/truetype/nirmala/Nirmala.ttf", 0),
+    ("NotoKannada", "/usr/share/fonts/truetype/noto/NotoSansKannada-Regular.ttf", 0),
+    ("NotoKannada", "C:/Windows/Fonts/NotoSansKannada-Regular.ttf", 0),
+    ("LohitKannada", "/usr/share/fonts/truetype/lohit-kannada/Lohit-Kannada.ttf", 0),
+    ("Tunga", "C:/Windows/Fonts/tunga.ttf", 0),
+)
+# A report is printed on the college's own letterhead; if the server cannot draw
+# Kannada at all, the page has to say so instead of inventing a name.
+UNICODE_TEXT_WARNING = ("Note: this report contains Kannada text that this server "
+                       "could not render. Print from the browser, or install a "
+                       "Kannada font (Nirmala UI / Noto Sans Kannada).")
+_unicode_face: str | None = None
+_unicode_checked = False
+_style_cache: dict = {}
+
+
+def _unicode_font() -> str | None:
+    """Name of a registered Kannada-capable face, or None if the host has none."""
+    global _unicode_face, _unicode_checked
+    if _unicode_checked:
+        return _unicode_face
+    _unicode_checked = True
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    bundled = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+    ordered = []
+    if os.path.isdir(bundled):
+        for fn in sorted(os.listdir(bundled)):
+            if fn.lower().endswith((".ttf", ".ttc")):
+                ordered.append((os.path.splitext(fn)[0],
+                                os.path.join(bundled, fn), 0))
+    ordered.extend(_KANNADA_CANDIDATES)
+    for name, path, idx in ordered:
+        if not os.path.exists(path):
+            continue
+        try:
+            pdfmetrics.registerFont(TTFont(name, path, subfontIndex=idx))
+        except Exception:
+            continue
+        # Measure a Kannada syllable: a face without Kannada coverage reports 0.
+        try:
+            from reportlab.pdfbase.pdfmetrics import stringWidth
+            if stringWidth("ನ", name, 10) <= 0:
+                continue
+        except Exception:
+            continue
+        _unicode_face = name
+        return _unicode_face
+    return None
+
+
+# Helvetica is encoded with WinAnsi (cp1252): anything outside it — Kannada
+# (U+0C80-U+0CFF), every other Indic script, Arabic — is silently substituted
+# by the 'n' glyph, a wrong name on an official document, printed quietly.
+
+
+def _needs_unicode(text) -> bool:
+    """True when a value holds characters Helvetica cannot draw.
+
+    Helvetica is encoded with WinAnsi (cp1252): anything outside it — Kannada,
+    every other Indic script, Arabic — is silently replaced by a fallback glyph,
+    so it must go to the Unicode face instead.
+    """
+    try:
+        str(text or "").encode("cp1252")
+    except UnicodeEncodeError:
+        return True
+    return False
+
+
+def _vstyle(style, text):
+    """`style` swapped for the Kannada-capable face when `text` needs it."""
+    if not _needs_unicode(text):
+        return style
+    face = _unicode_font()
+    if not face:
+        return style
+    key = (style.name, face)
+    if key not in _style_cache:
+        _style_cache[key] = ParagraphStyle(f"{style.name}_kn", parent=style,
+                                           fontName=face)
+    return _style_cache[key]
+
+
+def _para(text, style):
+    """Paragraph that falls back to a Kannada-capable face for its own text."""
+    return Paragraph(text, _vstyle(style, text))
+
+
+def _unicode_shortfall(model: dict) -> bool:
+    """True when this report holds text no available PDF font can draw."""
+    return _unicode_font() is None and _text_needs_unicode_tree(model)
+
+
+def _text_needs_unicode_tree(model: dict) -> bool:
+    seen = []
+
+    def walk(node):
+        if isinstance(node, str):
+            seen.append(_needs_unicode(node))
+        elif isinstance(node, dict):
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, (list, tuple)):
+            for v in node:
+                walk(v)
+    walk(model)
+    return any(seen)
+
+
 def _pdf_styles():
     return {
         "hdr": ParagraphStyle("H", fontName="Helvetica-Bold", fontSize=11, alignment=TA_CENTER, leading=16),
@@ -234,7 +353,7 @@ def _pdf_styles():
 def _pdf_table(header, rows, widths=None, pad=6):
     data = [header] + rows
     t = Table(data, repeatRows=1, colWidths=widths)
-    t.setStyle(TableStyle([
+    cmds = [
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(_DARK)),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
@@ -247,7 +366,17 @@ def _pdf_table(header, rows, widths=None, pad=6):
         ("TOPPADDING", (0, 0), (-1, -1), 4),
         ("LEFTPADDING", (0, 0), (-1, -1), pad),
         ("RIGHTPADDING", (0, 0), (-1, -1), pad),
-    ]))
+    ]
+    face = _unicode_font()
+    if face:
+        # A cell that holds Kannada needs the embedded face; Helvetica would
+        # draw it as the letter 'n'. Cells that cannot be given their own font
+        # stay on the table default.
+        for r, row in enumerate(rows, start=1):
+            for cidx, val in enumerate(row):
+                if isinstance(val, str) and _needs_unicode(val):
+                    cmds.append(("FONTNAME", (cidx, r), (cidx, r), face))
+    t.setStyle(TableStyle(cmds))
     return t
 
 
@@ -265,19 +394,23 @@ def _build_branded_pdf(path: str, model: dict):
         except Exception:
             pass
     hdr_tbl = Table([[logo_cell, [
-        Paragraph(model["institution"]["university"], s["hdr"]), Spacer(1, 2),
-        Paragraph(model["institution"]["college"], s["sub"]), Spacer(1, 2),
-        Paragraph(model["institution"]["department"], s["dept"]),
+        _para(model["institution"]["university"], s["hdr"]), Spacer(1, 2),
+        _para(model["institution"]["college"], s["sub"]), Spacer(1, 2),
+        _para(model["institution"]["department"], s["dept"]),
     ]]], colWidths=[2.8 * cm, None])
     hdr_tbl.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
     story.append(hdr_tbl)
     story.append(HRFlowable(width="100%", thickness=1.5, color=colors.HexColor(_DARK), spaceAfter=6))
     story.append(Paragraph("Student Report", s["title"]))
     story.append(Spacer(1, 8))
+    if _unicode_shortfall(model):
+        story.append(Paragraph(UNICODE_TEXT_WARNING, s["norm"]))
+        story.append(Spacer(1, 5))
 
     for st in students:
         if not single:
-            story.append(Paragraph(f"{st['name']} ({st['usn']})", s["sec"]))
+            story.append(Paragraph(f"{st['name']} ({st['usn']})",
+                                   _vstyle(s["sec"], st["name"])))
             story.append(Spacer(1, 3))
 
         # Personal information block (2-column)
@@ -285,7 +418,8 @@ def _build_branded_pdf(path: str, model: dict):
         for key, label in report_service.PERSONAL_FIELDS:
             v = st["personal"].get(key)
             if v not in (None, "", "null"):
-                info_rows.append([Paragraph(f"<b>{label}:</b>", s["lbl"]), Paragraph(str(v), s["val"])])
+                info_rows.append([Paragraph(f"<b>{label}:</b>", s["lbl"]),
+                                  _para(str(v), s["val"])])
         if info_rows:
             half = (len(info_rows) + 1) // 2
             left, right = info_rows[:half], info_rows[half:]
@@ -368,7 +502,7 @@ def _build_branded_pdf(path: str, model: dict):
 
         # Lifecycle status + audited history
         lc_pairs = _lifecycle_fields(st)
-        lc_rows = [[Paragraph(f"<b>{lbl}:</b>", s["lbl"]), Paragraph(str(val), s["val"])]
+        lc_rows = [[Paragraph(f"<b>{lbl}:</b>", s["lbl"]), _para(str(val), s["val"])]
                    for lbl, val in lc_pairs]
         hist = _lifecycle_history_rows(st)
         if lc_rows or hist:
@@ -858,12 +992,19 @@ def _fit_table_widths(columns, records, usable_cm, start_font, pad_pt):
                 toks.append(val)
         return toks
 
+    def _face_of(text, default):
+        # A Kannada cell is drawn with the embedded face, so it must also be
+        # *measured* with it — Helvetica reports the width of 'n' glyphs.
+        if _needs_unicode(text):
+            return _unicode_font() or default
+        return default
+
     def _mins_at(font):
         mins = []
         for col in columns:
             label_w = max((stringWidth(w, "Helvetica-Bold", font)
                            for w in str(col["label"]).split()), default=0.0)
-            val_w = max((stringWidth(t, "Helvetica", font)
+            val_w = max((stringWidth(t, _face_of(t, "Helvetica"), font)
                          for t in _atomic_tokens(col)), default=0.0)
             mins.append(max(label_w, val_w) * _PT_CM + pad_cm)
         return mins
@@ -910,7 +1051,7 @@ def _record_sheet_flowables(record, columns, s, usable_cm):
         cells = []
         for c in fields[i:i + 2]:
             cells.append(Paragraph(str(c["label"]), lbl_st))
-            cells.append(Paragraph(_cell_text(record.get(c["key"])), val_st))
+            cells.append(_para(_cell_text(record.get(c["key"])), val_st))
         while len(cells) < 4:
             cells.append(Paragraph("", val_st))
         rows.append(cells)
@@ -930,7 +1071,7 @@ def _record_sheet_flowables(record, columns, s, usable_cm):
         ("TOPPADDING", (0, 0), (-1, -1), 3),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
     ]))
-    return [Paragraph(title, head_st), tbl]
+    return [_para(title, head_st), tbl]
 
 
 class _NumberedCanvas(rl_canvas.Canvas):
@@ -1009,7 +1150,7 @@ def _build_table_pdf(path: str, model: dict):
 
     story = [_table_header_block(s, model),
              HRFlowable(width="100%", thickness=1.5, color=colors.HexColor(_DARK), spaceAfter=6),
-             Paragraph(model["title"], s["title"])]
+             _para(model["title"], s["title"])]
     # A single-record report needs no "Records: 1" line; only count lists.
     if model["record_count"] and model["record_count"] != 1:
         story.append(Paragraph(f"Records: {model['record_count']}", s["sub"]))
@@ -1018,8 +1159,11 @@ def _build_table_pdf(path: str, model: dict):
     story.append(Spacer(1, 8))
 
     for note in model["notes"]:
-        story.append(Paragraph(f"Note: {note}", s["norm"]))
+        story.append(_para(f"Note: {note}", s["norm"]))
     if model["notes"]:
+        story.append(Spacer(1, 5))
+    if _unicode_shortfall(model):
+        story.append(Paragraph(UNICODE_TEXT_WARNING, s["norm"]))
         story.append(Spacer(1, 5))
 
     if model["records"]:
@@ -1037,8 +1181,8 @@ def _build_table_pdf(path: str, model: dict):
             head_style = ParagraphStyle("th", parent=s["norm"], fontName="Helvetica-Bold",
                                         fontSize=fit_font, leading=fit_font + 3,
                                         textColor=colors.white, alignment=TA_CENTER)
-            head = [Paragraph(str(c["label"]), head_style) for c in columns]
-            body = [[Paragraph(_cell_text(r.get(c["key"])), cell_style) for c in columns]
+            head = [_para(str(c["label"]), head_style) for c in columns]
+            body = [[_para(_cell_text(r.get(c["key"])), cell_style) for c in columns]
                     for r in model["records"]]
             story.append(_pdf_table(head, body, widths=widths, pad=pad_pt))
     else:
@@ -1126,7 +1270,9 @@ def _build_table_excel(path: str, model: dict):
 
 
 def _build_table_csv(path: str, model: dict):
-    """CSV is intentionally limited to the selected records and category columns."""
+    """CSV carries the selected records in the category's columns, plus the same
+    explanatory notes the other formats print: a reader who opens the CSV must not
+    get a different answer from a reader who opens the PDF."""
     import csv
     columns = model["columns"]
     with open(path, "w", encoding="utf-8-sig", newline="") as fh:
@@ -1134,6 +1280,14 @@ def _build_table_csv(path: str, model: dict):
         w.writerow([c["label"] for c in columns])
         for rec in model["records"]:
             w.writerow([rec.get(c["key"], "") for c in columns])
+        extra = []
+        if not model["records"]:
+            extra.append("No records match this report for the selected students.")
+        extra += [f"Note: {note}" for note in model["notes"]]
+        if extra:
+            w.writerow([])
+            for line in extra:
+                w.writerow([line])
 
 
 def _build_table_html(model: dict) -> str:

@@ -21,6 +21,7 @@ Restore flow:
 """
 
 import os
+import re
 import subprocess
 import shutil
 from datetime import datetime, timedelta
@@ -102,6 +103,80 @@ def _verify_backup(filepath: str) -> tuple[bool, str]:
         return False, f"Verification error: {e}"
 
 
+def _row_path(backup: dict) -> str:
+    """Where a backup row says its file is — resolved one way, everywhere.
+
+    The list used to look in the backup directory by name while the restore and
+    delete doors used `backup_path` first, so the two could disagree about
+    whether a dump exists.
+    """
+    name = backup.get("backup_name") or ""
+    return backup.get("backup_path") or (os.path.join(_backup_dir(), name) if name else "")
+
+
+# A dump that cannot restore these is not a dump of this application.
+_CORE_TABLES = ("students", "marks")
+
+
+def _dump_problem(filepath: str) -> str | None:
+    """Return why this file must not be piped into the running database, or None.
+
+    `mysql < file` has no idea what it is being handed: a wrong file from this
+    folder, a log dump, or a dump of some other schema would be applied to the
+    college's live database and only discovered afterwards. Reading what the file
+    says about itself is cheap by comparison.
+
+    The one usable clue mysqldump leaves is its own header comment
+    (`-- Host: localhost    Database: student_db`) plus the
+    `-- Current Database: `x`` markers a `--databases` dump writes. This folder
+    really does mix schemas — it holds both production and staging dumps — so a
+    dump declared for another schema is refused rather than applied here.
+    """
+    banner = False
+    tables: set = set()
+    used: list = []
+    declared: list = []
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="ignore") as fh:
+            for i, line in enumerate(fh):
+                if i == 0:
+                    banner = line.startswith("--") and "dump" in line.lower()
+                if not declared:
+                    m = re.search(r"--\s*(?:Host:.*?|Current\s)?Database:\s*`?([^`\s]+)`?",
+                                  line)
+                    if m:
+                        declared.append(m.group(1))
+                if line.startswith("USE ") or line.startswith("use "):
+                    m = re.search(r"[`\"]?([A-Za-z0-9_$]+)[`\"]?;?\s*$", line)
+                    if m:
+                        used.append(m.group(1))
+                for m in re.finditer(r"(?:CREATE TABLE|INSERT INTO)\s+`([^`]+)`", line):
+                    tables.add(m.group(1))
+                if i > 200000:      # 10 MB dumps; the header is enough
+                    break
+    except Exception as e:
+        return f"the backup file could not be read ({e})."
+
+    if not banner:
+        return ("the file does not start with a mysqldump header, so it is not a "
+                "database dump this tool can trust.")
+    wrong = [s for s in declared if s != settings.MYSQL_DB]
+    if wrong:
+        return (f"the dump says it was taken from database '{wrong[0]}', but this app "
+                f"runs on '{settings.MYSQL_DB}'. Restore it only from a server started "
+                f"with MYSQL_DB={wrong[0]}, or select a dump whose header names "
+                f"'{settings.MYSQL_DB}'.")
+    other = [s for s in used if s != settings.MYSQL_DB]
+    if other:
+        return (f"the dump says it was taken from database '{other[0]}', but this app "
+                f"runs on '{settings.MYSQL_DB}'.")
+    if not any(t in tables for t in _CORE_TABLES):
+        seen = ", ".join(sorted(tables)[:5]) or "no tables"
+        return (f"the dump holds none of this application's core tables "
+                f"(found: {seen}).")
+    return None
+
+
 def _count_student_records() -> int:
     """Count total student records in the current database."""
     try:
@@ -113,6 +188,17 @@ def _count_student_records() -> int:
             return row[0] if row else 0
     except Exception:
         return 0
+
+
+def _cli_env() -> dict:
+    """Environment for mysqldump/mysql, carrying the password off the command line.
+
+    A `-p<secret>` argument is readable by anybody who can list processes on this
+    host (task manager, `wmic process`, a shared CI agent), and the college's
+    database login is the same one the app uses. MYSQL_PWD is the documented
+    channel that keeps it out of the process table.
+    """
+    return dict(os.environ, MYSQL_PWD=settings.MYSQL_PASSWORD)
 
 
 def _run_mysqldump(backup_path: str) -> tuple[bool, str]:
@@ -127,13 +213,28 @@ def _run_mysqldump(backup_path: str) -> tuple[bool, str]:
             f"-h{settings.MYSQL_HOST}",
             f"-P{settings.MYSQL_PORT}",
             f"-u{settings.MYSQL_USER}",
-            f"-p{settings.MYSQL_PASSWORD}",
             "--single-transaction",          # consistent snapshot, no lock
             "--routines",
             "--triggers",
             "--add-drop-table",
             "--complete-insert",
             "--extended-insert",
+            # The backup register and the audit trail describe the operations
+            # around this database; they are not the college's records. Dumping
+            # them means a restore rewinds them: the pre-restore safety dump
+            # taken to protect a restore had its own register row erased by that
+            # restore (the file stayed on disk, unnamed and unprunable), and every
+            # audit entry written between the dump and the restore was destroyed —
+            # including the RESTORE_START entry for the restore itself.
+            # The backup register and the audit trail describe the operations
+            # around this database; they are not the college's records. Dumping
+            # them means a restore rewinds them: the pre-restore safety dump
+            # taken to protect a restore had its own register row erased by that
+            # restore (the file stayed on disk, unnamed and unprunable), and every
+            # audit entry written between the dump and the restore was destroyed —
+            # including the RESTORE_START entry for the restore itself.
+            f"--ignore-table={settings.MYSQL_DB}.db_backups",
+            f"--ignore-table={settings.MYSQL_DB}.audit_log",
             settings.MYSQL_DB,
         ]
 
@@ -144,6 +245,7 @@ def _run_mysqldump(backup_path: str) -> tuple[bool, str]:
                 stderr=subprocess.PIPE,
                 timeout=300,  # 5 minute max
                 text=True,
+                env=_cli_env(),
             )
 
         if result.returncode != 0:
@@ -171,7 +273,6 @@ def _run_mysql_restore(backup_path: str) -> tuple[bool, str]:
             f"-h{settings.MYSQL_HOST}",
             f"-P{settings.MYSQL_PORT}",
             f"-u{settings.MYSQL_USER}",
-            f"-p{settings.MYSQL_PASSWORD}",
             settings.MYSQL_DB,
         ]
 
@@ -183,6 +284,7 @@ def _run_mysql_restore(backup_path: str) -> tuple[bool, str]:
                 stdout=subprocess.PIPE,
                 timeout=600,  # 10 minute max
                 text=True,
+                env=_cli_env(),
             )
 
         if result.returncode != 0:
@@ -362,7 +464,7 @@ def list_backups(current_user: dict = Depends(require_roles("Admin"))):
     with db_conn() as conn:
         cur = conn.cursor(dictionary=True)
         cur.execute(
-            """SELECT id, backup_name, backup_type, size_bytes, status, verified,
+            """SELECT id, backup_name, backup_path, backup_type, size_bytes, status, verified,
                created_by, created_at, completed_at, error_message, record_count
                FROM db_backups ORDER BY created_at DESC LIMIT 100"""
         )
@@ -374,16 +476,16 @@ def list_backups(current_user: dict = Depends(require_roles("Admin"))):
             b["created_at"] = str(b["created_at"])
         if b.get("completed_at"):
             b["completed_at"] = str(b["completed_at"])
-        # Check if file still exists on disk
-        b["file_exists"] = os.path.exists(
-            os.path.join(_backup_dir(), b["backup_name"])
-        ) if b.get("backup_name") else False
+        # Check if file still exists on disk — at the path the row records.
+        path = _row_path(b)
+        b["file_exists"] = bool(path) and os.path.exists(path)
+        b.pop("backup_path", None)
 
     return backups
 
 
 @router.get("/storage-status")
-def get_storage_status(current_user: dict = Depends(get_current_user)):
+def get_storage_status(current_user: dict = Depends(require_roles("Admin", "Staff"))):
     """
     Returns DB size, backup storage usage, disk info.
     Available to all authenticated users (Admins + Staff).
@@ -432,13 +534,40 @@ def get_storage_status(current_user: dict = Depends(get_current_user)):
 
         cur.close()
 
-    # Backup storage on disk
+    # Backup storage on disk, reconciled against the register. A dump no row
+    # points at cannot be restored from the UI and is never pruned; a row whose
+    # file is gone offers a restore button that will fail. Both have to be named
+    # for the database owner to act on them.
     backup_dir = _backup_dir()
-    backup_storage_bytes = sum(
-        os.path.getsize(os.path.join(backup_dir, f))
-        for f in os.listdir(backup_dir)
-        if os.path.isfile(os.path.join(backup_dir, f))
-    ) if os.path.exists(backup_dir) else 0
+    on_disk = {}
+    if os.path.exists(backup_dir):
+        for f in os.listdir(backup_dir):
+            fp = os.path.join(backup_dir, f)
+            if os.path.isfile(fp):
+                on_disk[os.path.normpath(fp)] = os.path.getsize(fp)
+    backup_storage_bytes = sum(on_disk.values())
+
+    with db_conn() as conn:
+        cur = conn.cursor(dictionary=True)
+        cur.execute("SELECT backup_name, backup_path, status FROM db_backups")
+        registered = cur.fetchall()
+        cur.close()
+    referenced = set()
+    missing_files = []
+    for row in registered:
+        path = os.path.normpath(_row_path(row))
+        referenced.add(path)
+        if path not in on_disk and row["status"] in ("success", "verified"):
+            missing_files.append(os.path.basename(path))
+
+    orphan_files = []
+    orphan_bytes = 0
+    for path, size in on_disk.items():
+        if path in referenced or not path.lower().endswith(".sql"):
+            continue
+        orphan_files.append((path, size))
+        orphan_bytes += size
+    orphan_files.sort(key=lambda item: -os.path.getmtime(item[0]))
 
     # Disk usage
     disk = shutil.disk_usage(backup_dir if os.path.exists(backup_dir) else ".")
@@ -452,6 +581,15 @@ def get_storage_status(current_user: dict = Depends(get_current_user)):
         warnings.append(f"WARNING: Disk is {disk_used_pct}% full ({disk_free_gb} GB free).")
     if recent_failures > 0:
         warnings.append(f"{recent_failures} backup failure(s) in the last 7 days. Check logs.")
+    if orphan_files:
+        warnings.append(
+            f"{len(orphan_files)} dump file(s) in {backup_dir} ({round(orphan_bytes/1024/1024, 2)} MB) "
+            "are not in the backup register: they cannot be restored from this screen and the "
+            "retention policy will never remove them. Ask the database owner before deleting.")
+    if missing_files:
+        warnings.append(
+            f"{len(missing_files)} registered backup(s) have no file on disk. Their restore "
+            "buttons will fail.")
 
     return {
         "db_size_mb": float(db_size.get("db_size_mb") or 0),
@@ -468,6 +606,15 @@ def get_storage_status(current_user: dict = Depends(get_current_user)):
         "disk_used_pct": disk_used_pct,
         "warnings": warnings,
         "backup_dir": backup_dir,
+        "orphan_dump_count": len(orphan_files),
+        "orphan_dump_mb": round(orphan_bytes / 1024 / 1024, 2),
+        "orphan_dumps": [
+            {"file": os.path.basename(path), "size_mb": round(size / 1024 / 1024, 2),
+             "modified": datetime.fromtimestamp(os.path.getmtime(path)).isoformat()}
+            for path, size in orphan_files[:25]
+        ],
+        "missing_file_count": len(missing_files),
+        "missing_files": missing_files[:25],
     }
 
 
@@ -511,12 +658,26 @@ def restore_backup(
             f"Backup {backup['backup_name']} has status '{backup['status']}' — cannot restore from a failed or running backup."
         )
 
-    backup_path = backup.get("backup_path") or os.path.join(_backup_dir(), backup["backup_name"])
+    backup_path = _row_path(backup)
     if not os.path.exists(backup_path):
         raise HTTPException(
             404,
             f"Backup file not found on disk: {backup['backup_name']}. It may have been deleted."
         )
+
+    # 1b. Read what the file says it is before anything is overwritten, and
+    # before the safety dump is written — a refused attempt must cost nothing.
+    problem = _dump_problem(backup_path)
+    if problem:
+        write_audit_log(
+            action="RESTORE_REFUSED", username=current_user["username"],
+            role=current_user["role"],
+            target_table="db_backups", target_id=str(backup_id),
+            summary=(f"Restore of {backup['backup_name']} refused before touching the "
+                     f"database: {problem} No changes were made."),
+            success=False, error_info=problem
+        )
+        raise HTTPException(400, f"Restore refused: {problem} Nothing was changed.")
 
     # 2. Create pre-restore safety backup
     safety_result = create_backup_internal(
@@ -579,11 +740,12 @@ def restore_backup(
     return {
         "success": True,
         "message": (
-            f"Database restored from backup '{backup['backup_name']}'. "
-            f"Students in database: {students_after}."
+            f"Database '{settings.MYSQL_DB}' restored from backup "
+            f"'{backup['backup_name']}'. Students in database: {students_after}."
         ),
         "restored_backup_name": backup["backup_name"],
         "restored_backup_created_at": str(backup.get("created_at", "")),
+        "target_database": settings.MYSQL_DB,
         "students_after_restore": students_after,
         "safety_backup_id": safety_backup_id,
         "safety_backup_name": safety_result.get("backup_name"),
@@ -606,11 +768,13 @@ def delete_backup(backup_id: int, current_user: dict = Depends(require_roles("Ad
     if backup["backup_type"] == "pre_restore":
         raise HTTPException(
             400,
-            "Pre-restore safety backups cannot be deleted manually. "
-            "They will be cleaned up by the retention policy after 30 days."
+            "Pre-restore safety backups are kept: the retention policy prunes only "
+            "automatic daily/weekly dumps, so nothing deletes this one automatically. "
+            "Ask the database owner before removing it, and check the disk usage under "
+            "Storage status."
         )
 
-    backup_path = backup.get("backup_path") or os.path.join(_backup_dir(), backup["backup_name"])
+    backup_path = _row_path(backup)
     if os.path.exists(backup_path):
         os.remove(backup_path)
 
@@ -636,7 +800,7 @@ def get_audit_log(
     limit: int = 100,
     action: Optional[str] = None,
     username: Optional[str] = None,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_roles("Admin", "Staff"))
 ):
     """
     Fetch enterprise audit log.
@@ -679,7 +843,7 @@ def get_audit_log(
 
 
 @router.get("/upload-versions")
-def get_upload_versions(current_user: dict = Depends(get_current_user)):
+def get_upload_versions(current_user: dict = Depends(require_roles("Admin", "Staff"))):
     """Return the upload version/snapshot history."""
     with db_conn() as conn:
         cur = conn.cursor(dictionary=True)

@@ -7,6 +7,7 @@ see 'AI Database Automator' (or configured MAIL_FROM_NAME) as the sender.
 Never exposes SMTP credentials, stack traces, or technical details to callers.
 On failure, raises EmailDeliveryError so the route layer can show a safe message.
 """
+import os
 import smtplib
 import time
 import logging
@@ -205,6 +206,14 @@ def send_otp_email(to_email: str, username: str, otp: str) -> None:
 
     # Dev mode if either is empty/whitespace
     if not mail_user.strip() or not mail_pass.strip():
+        # The OTP is a bearer credential for a password reset. Printing it is a
+        # developer convenience, so it is switched off as soon as the app calls
+        # itself production: without SMTP there the reset cannot reach anybody,
+        # and a token sitting in a production log is the worse outcome.
+        if os.getenv("APP_ENV", "development").strip().casefold() in {"production", "prod"}:
+            raise EmailDeliveryError(
+                "Password reset email cannot be sent: SMTP is not configured."
+            )
         # Dev-mode fallback: print to console only
         logger.warning(
             "[EMAIL] SMTP credentials not configured. OTP for %s printed to server log only.",

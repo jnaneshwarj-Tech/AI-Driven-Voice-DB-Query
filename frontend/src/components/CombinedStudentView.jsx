@@ -5,7 +5,7 @@ import { EditFieldModal, EditFeesModal } from './StudentEditor';
 import {
   User, Phone, MapPin, Mail, Droplet, Calendar,
   GraduationCap, BookOpen, Shield, AlertCircle, ChevronRight,
-  Home, Briefcase, CreditCard, FileWarning, Bus, Leaf, Info, Pencil, IndianRupee
+  Home, Briefcase, CreditCard, FileWarning, Leaf, Info, Pencil, IndianRupee
 } from 'lucide-react';
 
 // ── Academic-only keys (never shown in personal section) ─────────────────────
@@ -521,13 +521,6 @@ export default function CombinedStudentView({ data, responseLanguage }) {
                     {admissionInfoFields.map(k => (
                       <InfoRow key={k} label={prettyLabel(k)} value={p[k]} />
                     ))}
-                    {p.distance_from_college && (
-                      <InfoRow
-                        label="Distance from College"
-                        value={p.distance_from_college}
-                        icon={<Bus className="w-3 h-3 text-slate-400" />}
-                      />
-                    )}
                   </Section>
 
                 </div>
@@ -583,7 +576,7 @@ export default function CombinedStudentView({ data, responseLanguage }) {
                 {!hasAcademic && (
                   <span className="text-xs font-normal text-slate-400 italic ml-2 flex items-center gap-1">
                     <AlertCircle className="w-3 h-3" />
-                    {isKannada ? 'ಮಾಹಿತಿ ಲಭ್ಯವಿಲ್ಲ' : 'No academic records'}
+                    {isKannada ? 'ಲಭ್ಯವಿಲ್ಲ' : 'No academic records'}
                   </span>
                 )}
               </h3>

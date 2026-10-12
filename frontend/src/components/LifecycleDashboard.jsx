@@ -623,7 +623,7 @@ function StatusChangeModal({ student, options, onClose, onDone }) {
   const [form, setForm] = useState({
     to_status: '', event_type: 'STATUS_CHANGE', effective_date: '',
     last_enrolled_semester: '', last_enrolled_academic_year: '',
-    scheme: '', reason: '', document_ref: '', remarks: '',
+    scheme: '', reason: '', reason_category: '', document_ref: '', remarks: '',
   });
   const [busy, setBusy] = useState(false);
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
@@ -637,7 +637,9 @@ function StatusChangeModal({ student, options, onClose, onDone }) {
       const payload = Object.fromEntries(Object.entries(form).filter(([_, v]) => String(v).trim() !== ''));
       payload.last_enrolled_semester = payload.last_enrolled_semester ? Number(payload.last_enrolled_semester) : undefined;
       const r = await api.post(`/lifecycle/students/${encodeURIComponent(student.usn)}/status`, payload);
-      showToast({ type: 'success', message: `Status updated: ${r.data.from_status} → ${r.data.to_status}. Undo token recorded.` });
+      showToast(r.data.deduplicated
+        ? { type: 'info', message: `Already recorded as ${r.data.to_status} — nothing new was stored.` }
+        : { type: 'success', message: `Status updated: ${r.data.from_status} → ${r.data.to_status}. Undo token recorded.` });
       onDone();
     } catch (e) {
       showToast({ type: 'error', message: getUserMessage(e, 'Could not update lifecycle status.') });
@@ -690,6 +692,14 @@ function StatusChangeModal({ student, options, onClose, onDone }) {
             <input value={form.reason} onChange={set('reason')}
                    placeholder="Personal / medical / financial — leave blank if unknown"
                    className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800" />
+          </label>
+          <label className="flex flex-col gap-1 col-span-2">
+            <span className="text-slate-500 font-semibold uppercase text-[10px]">Reason Category (drives the register filter and reports)</span>
+            <select value={form.reason_category} onChange={set('reason_category')}
+                    className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
+              <option value="">Auto — worked out from the reason</option>
+              {(options.reason_categories || []).map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
           </label>
           <label className="flex flex-col gap-1 col-span-2">
             <span className="text-slate-500 font-semibold uppercase text-[10px]">Document Reference</span>

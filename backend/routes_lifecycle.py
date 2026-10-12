@@ -155,19 +155,41 @@ def _pick_fields(req: dict) -> dict:
     return {k: req.get(k) for k in _EVENT_FIELDS if req.get(k) is not None}
 
 
+def _resolve_category(fields: dict) -> dict:
+    """Store a reason category the register can actually filter on: an explicit
+    one is validated against the controlled vocabulary (an off-vocabulary value
+    would be invisible to the dropdown, the exports and every NL 'due to …'
+    question, so it is refused), and a dialog that only typed a reason gets a
+    category derived from it instead of loose text nobody can query."""
+    try:
+        fields["reason_category"] = LC.resolve_reason_category(
+            fields.get("reason_category"), fields.get("reason"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return fields
+
+
 def _apply_status_change(cur, conn, usn, to_status, fields, event_type, actor,
                          description):
     """Shared, transactional commit used by the explicit status endpoint and the
     natural-language confirm endpoint. Creates an undo snapshot, APPENDS an
     event, updates the derived cache, and finalizes — all within the caller's
-    transaction. Raises on failure so the caller rolls back."""
+    transaction. Raises on failure so the caller rolls back.
+
+    The repeated-record guard lives here, not in the callers, so that neither
+    write path can forget it: a staff member who submits the same status, date
+    and reason twice gets one event, whichever button they used."""
+    from_status = _current_status(cur, usn)
+    if LC.is_duplicate_lifecycle_event(cur, usn, to_status,
+                                       fields.get("effective_date"),
+                                       fields.get("reason_category")):
+        return from_status, None, True
     token = create_undo_snapshot("UPDATE", [usn], actor.get("username", ""),
                                  description, conn=conn)
-    from_status = _current_status(cur, usn)
     _append_event(cur, usn, event_type, from_status, to_status, fields, actor)
     _set_current(cur, usn, to_status, fields, actor)
     finalize_undo_snapshot(token, [usn], conn)
-    return from_status, token
+    return from_status, token, False
 
 
 # ── read endpoints ────────────────────────────────────────────────────────────
@@ -450,7 +472,7 @@ def change_status(
     to_status = LC.normalize_status(req.to_status)
     if not to_status:
         raise HTTPException(status_code=400, detail="Invalid lifecycle status.")
-    fields = _pick_fields(req.model_dump())
+    fields = _resolve_category(_pick_fields(req.model_dump()))
     event_type = req.event_type or LC.EV_STATUS_CHANGE
     with db_conn() as conn:
         conn.autocommit = False
@@ -460,7 +482,7 @@ def change_status(
             conn.rollback(); cur.close()
             raise HTTPException(status_code=404, detail="Student not found.")
         try:
-            from_status, token = _apply_status_change(
+            from_status, token, dedup = _apply_status_change(
                 cur, conn, usn, to_status, fields, event_type, current_user,
                 f"lifecycle status → {to_status}")
             conn.commit()
@@ -471,11 +493,18 @@ def change_status(
                             f"status→{to_status}", success=False, error_info=str(e)[:500])
             raise HTTPException(status_code=400, detail="Status change failed.")
         cur.close()
+    if dedup:
+        write_audit_log("lifecycle_status_change", current_user.get("username"),
+                        current_user.get("role"), "student_lifecycle_events", usn,
+                        f"duplicate suppressed → {to_status}")
+        return {"usn": usn, "from_status": from_status, "to_status": to_status,
+                "deduplicated": True, "undo_token": None,
+                "message": "This lifecycle event is already recorded; no duplicate created."}
     write_audit_log("lifecycle_status_change", current_user.get("username"),
                     current_user.get("role"), "student_lifecycle_events", usn,
                     f"{from_status} → {to_status} ({event_type})")
     return {"usn": usn, "from_status": from_status, "to_status": to_status,
-            "undo_token": token}
+            "deduplicated": False, "undo_token": token}
 
 
 # ── §1 natural-language recording (preview → authorized confirm) ──────────────
@@ -623,7 +652,8 @@ def nl_confirm(
         raise HTTPException(status_code=403,
                             detail="Confirmation expired or does not match this user/query.")
 
-    fields = {k: payload.get(k) for k in _EVENT_FIELDS if payload.get(k) is not None}
+    fields = _resolve_category(
+        {k: payload.get(k) for k in _EVENT_FIELDS if payload.get(k) is not None})
     event_type = payload.get("event_type") or _event_type_for_status(to_status)
 
     with db_conn() as conn:
@@ -633,17 +663,8 @@ def nl_confirm(
         if not _student_exists(cur, usn):
             conn.rollback(); cur.close()
             raise HTTPException(status_code=404, detail="Student not found.")
-        if LC.is_duplicate_lifecycle_event(
-                cur, usn, to_status, fields.get("effective_date"),
-                fields.get("reason_category")):
-            conn.rollback(); cur.close()
-            write_audit_log("lifecycle_nl_confirm", current_user.get("username"),
-                            current_user.get("role"), "student_lifecycle_events", usn,
-                            f"duplicate suppressed → {to_status}")
-            return {"usn": usn, "to_status": to_status, "deduplicated": True,
-                    "message": "This lifecycle event is already recorded; no duplicate created."}
         try:
-            from_status, token = _apply_status_change(
+            from_status, token, dedup = _apply_status_change(
                 cur, conn, usn, to_status, fields, event_type, current_user,
                 f"NL lifecycle record → {to_status}")
             conn.commit()
@@ -654,6 +675,13 @@ def nl_confirm(
                             f"status→{to_status}", success=False, error_info=str(e)[:500])
             raise HTTPException(status_code=400, detail="Could not record lifecycle status.")
         cur.close()
+    if dedup:
+        write_audit_log("lifecycle_nl_confirm", current_user.get("username"),
+                        current_user.get("role"), "student_lifecycle_events", usn,
+                        f"duplicate suppressed → {to_status}")
+        return {"usn": usn, "from_status": from_status, "to_status": to_status,
+                "deduplicated": True, "undo_token": None,
+                "message": "This lifecycle event is already recorded; no duplicate created."}
     write_audit_log("lifecycle_nl_confirm", current_user.get("username"),
                     current_user.get("role"), "student_lifecycle_events", usn,
                     f"{from_status} → {to_status} ({event_type})")

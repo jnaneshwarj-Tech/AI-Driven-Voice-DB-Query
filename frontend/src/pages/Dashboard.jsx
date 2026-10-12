@@ -437,6 +437,7 @@ export default function Dashboard() {
   const [activeSuggestion, setActiveSuggestion] = useState(-1);
   const [liveSearchTerm, setLiveSearchTerm] = useState('');
   const [opResult, setOpResult]     = useState(null);  // OperationResultModal data
+  const [filesVersion, setFilesVersion] = useState(0); // bump to re-read the file list after an undo
   // ── Generate Report (category-scoped, from displayed dashboard results) ──
   const [reportOpen, setReportOpen] = useState(false);
   const [tableRowsView, setTableRowsView] = useState(null); // {pageRows, filteredRows}
@@ -1253,7 +1254,7 @@ export default function Dashboard() {
 
             {/* ── Files / Uploads Tab ── */}
             {activeTab === 'files' && (
-              <FileExplorer canManageFiles={role === 'Admin'} onDataLoaded={(info) => {
+              <FileExplorer canManageFiles={role === 'Admin'} refreshVersion={filesVersion} onDataLoaded={(info) => {
                   setUploadNotice(info); 
                   setTimeout(() => setUploadNotice(null), 8000); 
                   if (info.operation_details) {
@@ -1816,12 +1817,15 @@ export default function Dashboard() {
             <div className="p-5 space-y-3">
               <p className="text-slate-600 text-sm">
                 {secondConfirm
-                  ? 'Confirm this operation now.'
-                  : confirmModal.data?.confirm_endpoint
-                    ? (confirmModal.data?.message || `You are about to ${confirmModal.data?.action_type === 'FEE_UPDATE' ? 'update this student’s fees' : 'record a lifecycle change'}.`)
-                    : confirmModal.data?.action_type === 'DELETE'
-                      ? 'Warning: This will permanently remove the selected student data. Do you want to continue?'
-                      : `You are about to execute a ${confirmModal.data?.action_type} operation.`}
+                  ? (confirmModal.data?.message
+                      ? `Last check before writing: ${confirmModal.data.message}`
+                      : 'Confirm this operation now.')
+                  : confirmModal.data?.message
+                    || (confirmModal.data?.confirm_endpoint
+                      ? `You are about to ${confirmModal.data?.action_type === 'FEE_UPDATE' ? 'update this student’s fees' : 'record a lifecycle change'}.`
+                      : confirmModal.data?.action_type === 'DELETE'
+                        ? 'Warning: This will permanently remove the selected student data. Do you want to continue?'
+                        : `You are about to execute a ${confirmModal.data?.action_type} operation.`)}
               </p>
               {/* Admin-only commit gate for NL fee / lifecycle previews */}
               {confirmModal.data?.role_restricted === 'Admin' &&
@@ -1875,6 +1879,7 @@ export default function Dashboard() {
           onClose={() => setOpResult(null)} 
           onUndoDone={() => {
             fetchHistory();
+            setFilesVersion(v => v + 1);
             showToast({ type: 'success', message: 'Operation successfully reverted!' });
           }}
         />

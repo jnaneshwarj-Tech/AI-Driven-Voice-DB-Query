@@ -50,6 +50,12 @@ _SENSITIVE_FIELDS = {
     "aadhar_no", "phone", "email", "emergency_contact_number", "parents_phone",
 }
 
+# Uploaded headings and intent-resolver aliases are free-form, so the column list
+# alone is not enough — a number is a number whatever the sheet called it.
+_CONTACT_KEY_RE = re.compile(
+    r"phone|mobile|contact|mahati|whatsapp|aadhar|aadar|aadhaar", re.I)
+_IDENTITY_KEY_RE = re.compile(r"aadhar|aadar|aadhaar", re.I)
+
 # dynamic_data JSON keys that represent fee information (workbook-imported).
 _FEE_KEY_HINTS = ("fee", "fees", "tution", "tuition", "amount", "balance",
                   "remaining", "paid", "challan")
@@ -104,29 +110,69 @@ def _mask(value: str, keep: int) -> str:
     return "*" * (len(value) - keep) + value[-keep:]
 
 
-def mask_for_role(row: dict, role: str) -> dict:
-    """Return a copy with sensitive identity fields masked for non-Admin roles."""
-    is_admin = str(role or "").strip().lower() == "admin"
-    if is_admin:
+def _sensitive_keys(row: dict) -> set:
+    """Every key of this row that carries contact or identity data."""
+    keys = set(_SENSITIVE_FIELDS).intersection(row)
+    keys |= {k for k in row if _CONTACT_KEY_RE.search(str(k))}
+    return keys
+
+
+def _identity_keys(keys: set) -> set:
+    return {k for k in keys if _IDENTITY_KEY_RE.search(str(k))}
+
+
+def mask_for_role(row: dict, role: str, edit_context: bool = False) -> dict:
+    """Role policy for personal data leaving the server.
+
+    Admin is the only role that sees these values in full, so a screen, an answer
+    and an exported file can never disagree about the same student.
+
+    `edit_context` is the one deliberate exception: the clerk who has to correct a
+    mistyped phone number must be able to read it, so Staff editing a contact
+    field sees the contact numbers — while the Aadhaar, which no one at the
+    counter has any reason to retype, stays hidden from every non-Admin.
+    """
+    role_norm = str(role or "").strip().lower()
+    if role_norm == "admin":
         return dict(row)
     masked = dict(row)
-    # Fixed sensitive columns PLUS any contact/phone-style column produced by the
-    # intent-field resolver (e.g. parent_contact_number, mothers_phone, an uploaded
-    # heading alias). A staff report must never expose a number the admin set didn't
-    # name literally, so mask by pattern too, not only by the static list.
-    fields = set(_SENSITIVE_FIELDS)
-    fields |= {
-        k for k in masked
-        if re.search(r"phone|mobile|contact|mahati|aadhar|aadar", str(k), re.I)
-    }
-    for field in fields:
-        if field in masked and _as_str(masked[field]):
+    keys = _sensitive_keys(masked)
+    if edit_context and role_norm == "staff":
+        # Keep only the identity numbers masked: the mask set is the set of keys
+        # to hide, so subtracting the Aadhaar here would have done the opposite of
+        # what the clerk exception intends.
+        keys = _identity_keys(keys)
+    for field in keys:
+        if _as_str(masked[field]):
             if field == "email":
                 local, _, domain = str(masked[field]).partition("@")
-                masked[field] = _mask(local, 1) + "@" + domain if domain else _mask(masked[field], 2)
+                masked[field] = (_mask(local, 1) + "@" + domain
+                                 if domain else _mask(masked[field], 2))
             else:
                 masked[field] = _mask(masked[field], 4)
     return masked
+
+
+def mask_rows_for_role(rows, role: str, edit_context: bool = False):
+    """`mask_for_role` over a list of result rows (non-dicts pass through)."""
+    if isinstance(rows, dict):
+        return mask_for_role(rows, role, edit_context)
+    return [mask_for_role(r, role, edit_context) if isinstance(r, dict) else r
+            for r in (rows or [])]
+
+
+def is_sensitive_field(field: str) -> bool:
+    return bool(_CONTACT_KEY_RE.search(str(field))
+                or str(field) in _SENSITIVE_FIELDS)
+
+
+def mask_value_for_role(field: str, value, role: str):
+    """One field's value under the same policy that covers whole rows, so a
+    change-history entry cannot show more of a phone number than the
+    profile screen does."""
+    if not is_sensitive_field(field):
+        return value
+    return mask_for_role({field: value}, role).get(field, value)
 
 
 def _is_fee_key(key: str) -> bool:
@@ -306,7 +352,10 @@ def build_report_model(data: list[dict], user: dict) -> dict:
             for header in table_headers:
                 if header in masked and masked[header] is not None:
                     merged[header] = masked[header]
-        refreshed_rows.append(_serialize(merged))
+        # `data` arrives from the caller, so overwriting the known columns is not
+        # enough: a sheet can name a phone column anything, and a row whose USN is
+        # not in the table would otherwise be exported verbatim and unmasked.
+        refreshed_rows.append(_serialize(mask_for_role(merged, role)))
 
     return {
         "institution": INSTITUTION,
@@ -505,6 +554,16 @@ def _fetch_students_by_rows(cur, rows):
     return result_usns, students
 
 
+def _reg_or_posted(srow: dict | None, row: dict, key: str, role: str) -> str:
+    """One field of one student, taken from the register when it holds them.
+
+    The submitted dashboard row is a fallback only for a USN the database has
+    never seen: a report is an official document, so a browser must not be able
+    to write values into it by posting them.
+    """
+    return _as_str((srow if srow else mask_for_role(row, role)).get(key))
+
+
 def _unique_student_rows(rows):
     """Collapse the displayed rows to one entry per student, preserving
     first-seen order.
@@ -553,11 +612,13 @@ def build_table_report_model(rows: list[dict], user: dict, category: str) -> dic
         student_rows = _unique_student_rows(rows)
 
         if category == "student_list":
-            # The displayed rows ARE the source of truth for a list report —
-            # the query engine just computed them live (including derived
-            # values like the current semester), and they are already
-            # role-masked. Re-reading flat cache columns here would show
-            # stale values the staff never saw on screen.
+            # The displayed rows are the source of truth for a list report —
+            # the query engine computed them live (including derived values like
+            # the current semester), and re-reading the flat cache columns here
+            # would show stale values the staff never saw on screen. They arrive
+            # from the caller over HTTP though, so they are NOT already masked:
+            # whatever the browser holds, this is the door that decides what the
+            # printed file may contain for this role.
             # A join (e.g. per-semester marks) can hand back the SAME student
             # repeated with identical values in every displayed column; those
             # exact duplicates are collapsed so the list reads professionally.
@@ -568,7 +629,8 @@ def build_table_report_model(rows: list[dict], user: dict, category: str) -> dic
             seen: set[tuple] = set()
             collapsed = 0
             for row in rows:
-                clean = _serialize({k: v for k, v in row.items() if k != "dynamic_data"})
+                clean = _serialize(mask_for_role(
+                    {k: v for k, v in row.items() if k != "dynamic_data"}, role))
                 record = {h: _display_cell(clean.get(h)) for h in headers}
                 key = tuple(record[h] for h in headers)
                 if key in seen:
@@ -601,8 +663,8 @@ def build_table_report_model(rows: list[dict], user: dict, category: str) -> dic
             for row in student_rows:
                 norm = _norm_usn(row.get("usn"))
                 srow = students.get(norm) or {}
-                name = _as_str(srow.get("name")) or _as_str(row.get("name"))
-                branch = _as_str(srow.get("branch")) or _as_str(row.get("branch"))
+                name = _reg_or_posted(srow, row, "name", role)
+                branch = _reg_or_posted(srow, row, "branch", role)
                 sems = academic_map.get(norm, [])
                 if not sems:
                     missing += 1
@@ -620,13 +682,24 @@ def build_table_report_model(rows: list[dict], user: dict, category: str) -> dic
 
         elif category == "personal":
             columns = [(k, field_label(k)) for k in _PERSONAL_REPORT_KEYS]
+            unverified = 0
             for row in student_rows:
                 norm = _norm_usn(row.get("usn"))
                 srow = students.get(norm)
-                source = mask_for_role(srow, role) if srow else dict(row)
+                # The register answers for a student it holds. A value MySQL does
+                # not have must not be printed as the college's record just
+                # because the browser posted one — a report is an official
+                # document, and the college is responsible for what it says.
+                # Only a USN the register has never seen uses the submitted row,
+                # and then only through the same role mask.
+                source = srow if srow else dict(row)
+                unverified += 0 if srow else 1
+                source = mask_for_role(source, role)
                 source = _serialize({k: v for k, v in source.items() if k != "dynamic_data"})
-                record = {k: _display_cell(source.get(k) or row.get(k)) for k, _ in columns}
-                records.append(record)
+                records.append({k: _display_cell(source.get(k)) for k, _ in columns})
+            if unverified:
+                notes.append(f"{unverified} USN(s) are not in the register; their cells come "
+                             f"from the submitted rows rather than from the database.")
 
         elif category == "fees":
             fees_map: dict[str, list] = {}
@@ -647,7 +720,7 @@ def build_table_report_model(rows: list[dict], user: dict, category: str) -> dic
             for row in student_rows:
                 norm = _norm_usn(row.get("usn"))
                 srow = students.get(norm) or {}
-                name = _as_str(srow.get("name")) or _as_str(row.get("name"))
+                name = _reg_or_posted(srow, row, "name", role)
                 frows = fees_map.get(norm, [])
                 paid_vals = [_to_number(f.get("amount_paid")) for f in frows]
                 pend_vals = [_to_number(f.get("remaining_amount")) for f in frows]
@@ -712,13 +785,14 @@ def build_table_report_model(rows: list[dict], user: dict, category: str) -> dic
                 lc_row = lifecycle_map.get(norm) or {}
                 status = (_as_str(lc_row.get("current_status"))
                           or _as_str(srow.get("lifecycle_status"))
-                          or _as_str(row.get("lifecycle_status")) or "Active")
+                          or (_reg_or_posted({}, row, "lifecycle_status", role) if not srow else "")
+                          or "Active")
                 if status not in LC.DISCONTINUED_STATUSES:
                     excluded += 1
                     continue
                 records.append({
                     "usn": srow.get("usn") or row.get("usn") or norm,
-                    "name": _as_str(srow.get("name")) or _as_str(row.get("name")),
+                    "name": _reg_or_posted(srow, row, "name", role),
                     "branch": _as_str(srow.get("branch")),
                     "lifecycle_status": status,
                     "effective_date": _display_cell(lc_row.get("effective_date")),

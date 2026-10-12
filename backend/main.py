@@ -10,6 +10,11 @@ import routes_backup, routes_monitor, routes_lifecycle, routes_update
 from database import create_indexes, init_pool
 from scheduler import start_scheduler, stop_scheduler
 
+
+def _expose_docs() -> bool:
+    import os
+    return os.getenv("API_DOCS", "").strip().lower() in ("1", "true", "yes")
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -24,7 +29,13 @@ app = FastAPI(
     title="AI Student Data Management System",
     description="NLP → SQL · MySQL · Role-based · File Upload · Charts · PDF · Backup & Recovery",
     version="4.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    # The generated schema lists every door and payload in the system. That is a
+    # developer tool, not something college staff use, so it stays closed in a
+    # deployment; start with API_DOCS=1 to open /docs and /openapi.json again.
+    docs_url="/docs" if _expose_docs() else None,
+    redoc_url="/redoc" if _expose_docs() else None,
+    openapi_url="/openapi.json" if _expose_docs() else None,
 )
 
 app.add_middleware(

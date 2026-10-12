@@ -189,6 +189,7 @@ def _sync_dynamic_data_keys(cur, usn: str, wanted: dict) -> None:
 @router.get("/fields/{usn}")
 def get_editable_fields(usn: str, current_user: dict = Depends(get_current_user)):
     """Current values + editable schema for one student (drives the Edit form)."""
+    import report_service
     canonical = _resolve_usn(usn)
     with db_conn() as conn:
         cur = conn.cursor(dictionary=True)
@@ -197,6 +198,11 @@ def get_editable_fields(usn: str, current_user: dict = Depends(get_current_user)
         cur.close()
     if not student:
         raise HTTPException(404, "Student not found.")
+    # The form feeds a write, so a Staff user may read the contact number they are
+    # about to correct — but an Aadhaar is never shown to a non-Admin anywhere,
+    # including here, and a Viewer gets the same mask as every other screen.
+    student = report_service.mask_for_role(student, current_user["role"],
+                                           edit_context=True)
     return {
         "usn": canonical,
         "name": student.get("name"),

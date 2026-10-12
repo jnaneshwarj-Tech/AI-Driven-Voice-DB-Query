@@ -230,7 +230,27 @@ def translate_kannada_to_english_semantic(
     
     # Query contains Kannada Unicode - perform semantic translation
     logger.info(f"[TRANSLATE] Translating Kannada query: {original_query[:100]}...")
-    
+
+    # Step 0: the local keyword normalizer.
+    # Machine translation rewrites person names: "ಮನೋಜ ಕುಮಾರ್ ಅವರ ವಿವರಗಳು ತೋರಿಸಿ"
+    # came back as "Show details of Manoj Kumar", and the Latin spelling matches
+    # no row in a database that stores the name in Kannada script; the mixed
+    # "Ananya Ananya ವಿವರಗಳು ತೋರಿಸಿ" came back as "Ananya Show details of Ananya".
+    # normalize_query translates the request grammar and leaves the name exactly
+    # as typed, so when it accounts for every Kannada word there is nothing left
+    # for the network to add.
+    from kannada_processor import normalize_query, is_structural_word
+    local_query, _local_lang = normalize_query(original_query)
+    if not any(is_structural_word(token)
+               for token in re.findall(r'[\u0C80-\u0CFF]+', local_query)):
+        return {
+            'original_query': original_query,
+            'normalized_query': local_query,
+            'detected_language': 'kannada' if language == 'kannada' else 'mixed',
+            'translation_method': 'keyword_local',
+            'protected_entities': {},
+        }
+
     # Step 1: Protect entities (USNs, numbers, technical terms)
     protected_text, entity_map = _protect_entities(original_query)
     logger.debug(f"[TRANSLATE] Protected entities: {list(entity_map.values())}")

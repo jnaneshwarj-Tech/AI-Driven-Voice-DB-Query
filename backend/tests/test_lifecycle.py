@@ -455,19 +455,25 @@ class LifecycleNLQueryTests(unittest.TestCase):
     # English deterministic routing matches independent DB truth
     def test_discontinued_listing_matches_db_truth(self):
         exp = sorted(r["usn"] for r in _query(
-            "SELECT usn FROM students WHERE lifecycle_status IN (%s,%s,%s)",
+            "SELECT s.usn FROM students s LEFT JOIN student_lifecycle_status ls "
+            "ON ls.usn=s.usn WHERE COALESCE(ls.current_status, s.lifecycle_status) "
+            "IN (%s,%s,%s)",
             ("Temporarily Discontinued", "Discontinued-Review Req", "Dropout-College Recorded")))
         self.assertEqual(self._usns_in_sql_result("show students who discontinued their studies"), exp)
 
     def test_dropout_listing(self):
         exp = sorted(r["usn"] for r in _query(
-            "SELECT usn FROM students WHERE lifecycle_status IN (%s,%s,%s)",
+            "SELECT s.usn FROM students s LEFT JOIN student_lifecycle_status ls "
+            "ON ls.usn=s.usn WHERE COALESCE(ls.current_status, s.lifecycle_status) "
+            "IN (%s,%s,%s)",
             ("Dropout-College Recorded", "Temporarily Discontinued", "Discontinued-Review Req")))
         self.assertEqual(self._usns_in_sql_result("list dropouts"), exp)
 
     def test_rejoined_and_cleared_backlogs_excludes_open_backlog(self):
         exp = sorted(r["usn"] for r in _query(
-            "SELECT s.usn FROM students s WHERE s.lifecycle_status=%s "
+            "SELECT s.usn FROM students s LEFT JOIN student_lifecycle_status ls "
+            "ON ls.usn=s.usn "
+            "WHERE COALESCE(ls.current_status, s.lifecycle_status)=%s "
             "AND s.usn NOT IN (SELECT sb.usn FROM student_backlogs sb WHERE sb.cleared=0)",
             ("Rejoined-Active",)))
         got = self._usns_in_sql_result("students who rejoined and cleared all backlogs")
@@ -489,8 +495,9 @@ class LifecycleNLQueryTests(unittest.TestCase):
         mix = _build_lifecycle_query(mix_norm)
         for name, built in (("kn", kn), ("rk", rk), ("mixed", mix)):
             self.assertIsNotNone(built, f"{name} produced no lifecycle SQL (norm={built})")
-            # all resolve to the same status IN(...) filter set as English
-            self.assertIn("lifecycle_status IN", built["sql"])
+            # all resolve to the same register-truth status filter as English
+            self.assertIn("COALESCE(ls.current_status, s.lifecycle_status) IN",
+                          built["sql"])
         self.assertIsNotNone(en)
 
     def test_roman_kannada_rejoin_routes(self):
@@ -849,6 +856,60 @@ class LifecycleMultilingualRecordTests(unittest.TestCase):
         en = LC.normalize_status(
             LC.parse_lifecycle_command("USN 9ZZLC0001 discontinued")["target_status"])
         self.assertEqual(en, LC.STATUS_TEMP_DISCONTINUED)
+
+
+class LifecycleFieldParsingTests(unittest.TestCase):
+    """Found by recording a lifecycle status in the browser and reading the
+    register afterwards: a date a staff member typed belongs in EFFECTIVE DATE,
+    an academic year belongs in its own column, and neither may corrupt the
+    reason sentence — nor may 'semester 5' be understood only one way round."""
+
+    def test_a_typed_date_leaves_the_reason_sentence_clean(self):
+        cases = [
+            ("mark 9ZZLC0001 as temporarily discontinued due to medical reasons "
+             "on 01-10-2026", "medical reasons", "medical", "2026-10-01"),
+            ("9ZZLC0001 discontinued due to financial problems in 2026",
+             "financial problems", "financial", None),
+            ("record 9ZZLC0001 dropout due to lack of interest dated 2026-10-01",
+             "lack of interest", "other", "2026-10-01"),
+            ("9ZZLC0001 discontinued due to personal reasons on march 2026",
+             "personal reasons", "personal", "2026-03-01"),
+            ("9ZZLC0001 discontinued due to money problem effective 15-03-2026",
+             "money problem", "financial", "2026-03-15"),
+        ]
+        for raw, reason, category, effective in cases:
+            parsed = LC.parse_lifecycle_command(raw)
+            self.assertEqual(parsed["reason_text"], reason, raw)
+            self.assertEqual(parsed["reason_category"], category, raw)
+            self.assertEqual(parsed["effective_date"], effective, raw)
+
+    def test_a_date_the_parser_did_not_understand_is_not_discarded(self):
+        # 'last september 2026' is not a form the date reader knows, so it must
+        # stay in the reason rather than vanish from both columns.
+        parsed = LC.parse_lifecycle_command(
+            "9ZZLC0001 discontinued due to illness last september 2026")
+        self.assertEqual(parsed["reason_text"], "illness last september 2026")
+        self.assertIsNone(parsed["effective_date"])
+
+    def test_a_full_date_is_never_mistaken_for_an_academic_year(self):
+        self.assertIsNone(LC.parse_lifecycle_command(
+            "9ZZLC0001 dropout due to lack of interest dated 2026-10-01")["academic_year"])
+        self.assertEqual(LC.parse_lifecycle_command(
+            "9ZZLC0001 discontinued for the 2024-25 year due to medical"
+        )["academic_year"], "2024-25")
+
+    def test_semester_number_is_read_before_and_after_the_word(self):
+        cases = [
+            ("9ZZLC0001 discontinued in 5th semester due to illness", 5),
+            ("discontinue 9ZZLC0001 due to illness, semester 5", 5),
+            ("9ZZLC0001 discontinued, last enrolled semester was 6 due to medical", 6),
+            ("9ZZLC0001 dropped in sem 3 due to money", 3),
+            ("9ZZLC0001 discontinued due to financial problems in 2026", None),
+            ("9ZZLC0001 discontinued due to illness, semester 120", None),
+        ]
+        for raw, semester in cases:
+            self.assertEqual(
+                LC.parse_lifecycle_command(raw)["last_enrolled_semester"], semester, raw)
 
 
 class LifecycleTransitionTests(unittest.TestCase):

@@ -20,9 +20,10 @@ import json, os, uuid
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from database import db_conn, write_audit_log
-from auth import get_current_user
+from auth import get_current_user, require_roles
 from config import settings
 from error_messages import safe_http_error
+import report_service
 
 router = APIRouter(prefix="/api/undo", tags=["Undo / Restore"])
 
@@ -124,10 +125,15 @@ def _json_value(value):
 
 
 def _capture_state(cur, usns: list[str]) -> dict:
-    """Capture the student/marks/fees state for the affected USNs."""
+    """Capture the student/marks/fees/backlogs/provenance/lifecycle state for the USNs.
+
+    The lifecycle register is captured even though the undo does not re-insert it
+    (it re-derives it): an operator's newer status work must stop the undo instead
+    of being silently overwritten by it."""
     unique_usns = list(dict.fromkeys(u for u in usns if u))
     if not unique_usns:
-        return {"students": [], "marks": [], "fees": []}
+        return {"students": [], "marks": [], "fees": [], "backlogs": [],
+                "provenance": [], "lifecycle": []}
     placeholders = ','.join(['%s'] * len(unique_usns))
     cur.execute(f"SELECT * FROM students WHERE usn IN ({placeholders}) ORDER BY usn", tuple(unique_usns))
     students = cur.fetchall()
@@ -135,16 +141,39 @@ def _capture_state(cur, usns: list[str]) -> dict:
     marks = cur.fetchall()
     cur.execute(f"SELECT * FROM student_fees WHERE usn IN ({placeholders}) ORDER BY usn, fee_type, year", tuple(unique_usns))
     fees = cur.fetchall()
+    cur.execute(f"SELECT * FROM student_backlogs WHERE usn IN ({placeholders}) ORDER BY usn, id", tuple(unique_usns))
+    backlogs = cur.fetchall()
+    cur.execute(f"SELECT * FROM student_field_sources WHERE usn IN ({placeholders}) "
+                "ORDER BY usn, field_name, source_filename", tuple(unique_usns))
+    provenance = cur.fetchall()
+    cur.execute(f"SELECT * FROM student_lifecycle_status WHERE usn IN ({placeholders}) ORDER BY usn",
+                tuple(unique_usns))
+    lifecycle = [
+        {k: _json_value(v) for k, v in row.items() if k not in ('created_at', 'updated_at')}
+        for row in cur.fetchall()
+    ]
     return {
         "students": [{k: _json_value(v) for k, v in row.items()} for row in students],
         "marks": [{k: _json_value(v) for k, v in row.items()} for row in marks],
         "fees": [{k: _json_value(v) for k, v in row.items()} for row in fees],
+        "backlogs": [{k: _json_value(v) for k, v in row.items()} for row in backlogs],
+        "provenance": [{k: _json_value(v) for k, v in row.items()} for row in provenance],
+        "lifecycle": lifecycle,
     }
 
 
 def _states_match(expected: dict, actual: dict) -> bool:
-    """Compare snapshots deterministically, independent of MySQL value types."""
-    return json.dumps(expected, sort_keys=True, separators=(',', ':')) == json.dumps(actual, sort_keys=True, separators=(',', ':'))
+    """Compare snapshots deterministically, independent of MySQL value types.
+    Snapshots written before a table joined the capture (e.g. backlogs,
+    provenance) have no section for it: compare only the sections the stored
+    snapshot carries, or every pre-existing undo token would be refused as
+    'changed again'."""
+    sections = ('students', 'marks', 'fees', 'backlogs', 'provenance', 'lifecycle')
+    keys = [k for k in sections if k in expected]
+    picked_expected = {k: expected.get(k, []) for k in keys}
+    picked_actual = {k: actual.get(k, []) for k in keys}
+    return json.dumps(picked_expected, sort_keys=True, separators=(',', ':')) == \
+        json.dumps(picked_actual, sort_keys=True, separators=(',', ':'))
 
 
 def create_undo_snapshot(
@@ -153,6 +182,7 @@ def create_undo_snapshot(
     performed_by: str,
     description: str = "",
     conn=None,
+    filename: str = "",
 ) -> str:
     """
     Creates an undo snapshot for the given USNs.
@@ -179,8 +209,13 @@ def create_undo_snapshot(
             "existing_students": before_state['students'],
             "existing_marks": before_state['marks'],
             "existing_fees": before_state.get('fees', []),
+            "existing_backlogs": before_state.get('backlogs', []),
+            "existing_provenance": before_state.get('provenance', []),
             "new_usns": [u for u in unique_usns if u not in existing_usns],
         })
+        if filename:
+            # An import undo must also un-say "this file is in the database".
+            snapshot_clean["upload_filename"] = filename
         cur.close()
         token = str(uuid.uuid4())
         cur = conn.cursor()
@@ -216,14 +251,26 @@ def finalize_undo_snapshot(token: str, affected_usns: list[str], conn) -> None:
     cur.close()
 
 
+def _may_act_on_undo(record: dict, current_user: dict) -> bool:
+    """Whether this operator is allowed to run this rollback at all.
+
+    An undo overwrites whatever the table holds now, so it belongs to the person
+    who made the change. File Trash restores are the exception: they are
+    Admin-managed regardless of who deleted the file.
+    """
+    if canonical_operation_type(record["operation_type"]) == "FILE_DELETE":
+        return current_user.get("role") == "Admin"
+    return record.get("performed_by") == current_user.get("username")
+
+
 def _undo_block_reason(record: dict, current_user: dict, conn=None) -> str | None:
     """Return a user-safe reason when a rollback is no longer safe."""
     if not record.get('committed') or not record.get('post_state_data'):
         return "This operation was not committed successfully and cannot be undone."
     is_file_delete = canonical_operation_type(record["operation_type"]) == "FILE_DELETE"
-    if is_file_delete and current_user.get("role") != "Admin":
-        return "Only an Admin can restore a file from Trash."
-    if not is_file_delete and record.get('performed_by') != current_user.get('username'):
+    if not _may_act_on_undo(record, current_user):
+        if is_file_delete:
+            return "Only an Admin can restore a file from Trash."
         return "Permission denied. You can only undo your own operation."
     timestamp = record.get('timestamp')
     if isinstance(timestamp, str):
@@ -427,8 +474,45 @@ def _restore_legacy_soft_delete(token: str, current_user: dict):
     }
 
 
+def _restore_lifecycle_state(cur, usns: list[str], current_user: dict) -> None:
+    """Re-sync the lifecycle register with reverted student rows.
+
+    A status change writes students.lifecycle_status, the student_lifecycle_status
+    cache AND an append-only event. Undo restores the student row, so without this
+    the Lifecycle tab keeps showing the status that was just undone. The correction
+    is recorded as an event (history is never rewritten or deleted), which also
+    keeps the event chain continuous."""
+    if not usns:
+        return
+    import lifecycle as LC
+    placeholders = ",".join(["%s"] * len(usns))
+    cur.execute(
+        f"SELECT usn, lifecycle_status FROM students WHERE usn IN ({placeholders})",
+        tuple(usns))
+    restored = {r[0]: (r[1] or LC.STATUS_ACTIVE) for r in cur.fetchall()}
+    cur.execute(
+        f"SELECT usn, current_status FROM student_lifecycle_status "
+        f"WHERE usn IN ({placeholders})", tuple(usns))
+    cached = {r[0]: r[1] for r in cur.fetchall()}
+    for usn, status in restored.items():
+        before = cached.get(usn)
+        if before is None or before == status:
+            continue
+        cur.execute(
+            "INSERT INTO student_lifecycle_events "
+            "(usn, event_type, from_status, to_status, actor_username, actor_role, remarks) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s)",
+            (usn, LC.EV_CORRECTION, before, status,
+             current_user.get("username"), current_user.get("role"),
+             "Undone: previous lifecycle status restored"))
+        cur.execute(
+            "UPDATE student_lifecycle_status SET current_status=%s, updated_by=%s "
+            "WHERE usn=%s", (status, current_user.get("username"), usn))
+
+
 @router.post("/restore/{token}")
-def restore_student(token: str, current_user: dict = Depends(get_current_user)):
+def restore_student(token: str,
+                    current_user: dict = Depends(require_roles("Admin", "Staff"))):
     """
     Unified restore endpoint.
     Handles global undo snapshots (DELETE, INSERT, UPDATE, UPLOAD, SEMESTER_UPDATE)
@@ -449,17 +533,21 @@ def restore_student(token: str, current_user: dict = Depends(get_current_user)):
         return _restore_legacy_soft_delete(token, current_user)
 
     is_file_delete = canonical_operation_type(record["operation_type"]) == "FILE_DELETE"
-    if is_file_delete and current_user.get("role") != "Admin":
-        raise HTTPException(403, "Only an Admin can restore a file from Trash.")
-
     # Check undo ownership; file restores are Admin-managed through Trash.
-    if not is_file_delete and record.get('performed_by') != current_user.get('username'):
-        raise HTTPException(403, "Permission denied. You can only undo your own operation.")
+    if not _may_act_on_undo(record, current_user):
+        raise HTTPException(
+            403,
+            "Only an Admin can restore a file from Trash." if is_file_delete
+            else "Permission denied. You can only undo your own operation.",
+        )
 
     snapshot_data = json.loads(record['snapshot_data'])
     existing_students = snapshot_data.get('existing_students', [])
     existing_marks = snapshot_data.get('existing_marks', [])
     existing_fees = snapshot_data.get('existing_fees', [])
+    existing_backlogs = snapshot_data.get('existing_backlogs', [])
+    existing_provenance = snapshot_data.get('existing_provenance', [])
+    upload_filename = snapshot_data.get('upload_filename')
     new_usns = snapshot_data.get('new_usns', [])
 
     file_trash_move = None
@@ -488,6 +576,7 @@ def restore_student(token: str, current_user: dict = Depends(get_current_user)):
 
     reverted_adds = 0
     reverted_updates = 0
+    restored = {"students": 0, "marks": 0, "fees": 0, "backlogs": 0, "provenance": 0}
 
     try:
         with db_conn() as conn:
@@ -512,17 +601,39 @@ def restore_student(token: str, current_user: dict = Depends(get_current_user)):
                         tuple(new_usns)
                     )
                     cur.execute(
+                        f"DELETE FROM student_backlogs WHERE usn IN ({format_strings})",
+                        tuple(new_usns)
+                    )
+                    cur.execute(
+                        f"DELETE FROM student_field_sources WHERE usn IN ({format_strings})",
+                        tuple(new_usns)
+                    )
+                    cur.execute(
                         f"DELETE FROM students WHERE usn IN ({format_strings})",
                         tuple(new_usns)
                     )
                     reverted_adds = len(new_usns)
 
-                # 2. Revert updated/deleted students to their previous state
+                # 2. Revert updated/deleted students to their previous state.
+                # Child rows are cleared for every USN the snapshot captured, not
+                # only for the students that still had a row: a mark or fee that
+                # outlived its student would survive the delete and make the
+                # re-insert below collide.
+                captured_usns = list(dict.fromkeys(
+                    [s['usn'] for s in existing_students] +
+                    [m['usn'] for m in existing_marks] +
+                    [f['usn'] for f in existing_fees] +
+                    [b['usn'] for b in existing_backlogs] +
+                    [p['usn'] for p in existing_provenance]))
+                if captured_usns:
+                    child_ph = ','.join(['%s'] * len(captured_usns))
+                    for child in ("marks", "student_fees", "student_backlogs",
+                                  "student_field_sources"):
+                        cur.execute(f"DELETE FROM {child} WHERE usn IN ({child_ph})",
+                                    tuple(captured_usns))
+
                 for s in existing_students:
                     usn = s['usn']
-                    # Delete current state
-                    cur.execute("DELETE FROM marks WHERE usn=%s", (usn,))
-                    cur.execute("DELETE FROM student_fees WHERE usn=%s", (usn,))
                     cur.execute("DELETE FROM students WHERE usn=%s", (usn,))
 
                     # Re-insert previous state
@@ -535,34 +646,83 @@ def restore_student(token: str, current_user: dict = Depends(get_current_user)):
                         values
                     )
                     reverted_updates += 1
+                restored["students"] = reverted_updates
 
-                # 3. Re-insert previous marks
+                # 2b. A lifecycle status change is mirrored in the derived register
+                # and in append-only history. Reverting the student row alone would
+                # leave the Lifecycle tab showing the undone status, so re-sync the
+                # cache and record the correction as an event — history stays the
+                # audit trail, nothing is deleted.
+                if existing_students:
+                    _restore_lifecycle_state(
+                        cur, [s['usn'] for s in existing_students], current_user)
+
+                # 3. Re-insert previous marks. Plain INSERT, no try/except: a mark
+                # row the database refuses means this undo is incomplete, and an
+                # incomplete undo must roll back and say so rather than report a
+                # student as restored while it is short of its own record.
                 for m in existing_marks:
                     cols = [k for k in m if k != 'id']
                     placeholders = ', '.join(['%s'] * len(cols))
                     col_names    = ', '.join([f'`{c}`' for c in cols])
                     values       = [m[c] for c in cols]
-                    try:
-                        cur.execute(
-                            f"INSERT IGNORE INTO marks ({col_names}) VALUES ({placeholders})",
-                            values
-                        )
-                    except Exception:
-                        pass
+                    cur.execute(
+                        f"INSERT INTO marks ({col_names}) VALUES ({placeholders})",
+                        values
+                    )
+                    restored["marks"] += 1
 
-                # 3b. Re-insert previous fee rows
+                # 3b. Re-insert previous fee rows — same rule as marks.
                 for f in existing_fees:
                     cols = [k for k in f if k != 'id']
                     placeholders = ', '.join(['%s'] * len(cols))
                     col_names    = ', '.join([f'`{c}`' for c in cols])
                     values       = [f[c] for c in cols]
-                    try:
-                        cur.execute(
-                            f"INSERT IGNORE INTO student_fees ({col_names}) VALUES ({placeholders})",
-                            values
-                        )
-                    except Exception:
-                        pass
+                    cur.execute(
+                        f"INSERT INTO student_fees ({col_names}) VALUES ({placeholders})",
+                        values
+                    )
+                    restored["fees"] += 1
+
+                # 3c. Re-insert previous backlog rows. The table has no unique
+                # key, so plain INSERT: the rows above were deleted moments ago
+                # and a failure rolls the whole restore back.
+                for b in existing_backlogs:
+                    cols = [k for k in b if k != 'id']
+                    placeholders = ', '.join(['%s'] * len(cols))
+                    col_names    = ', '.join([f'`{c}`' for c in cols])
+                    values       = [b[c] for c in cols]
+                    cur.execute(
+                        f"INSERT INTO student_backlogs ({col_names}) VALUES ({placeholders})",
+                        values
+                    )
+                    restored["backlogs"] += 1
+
+                # 3d. Re-insert the provenance rows the operation created or
+                # changed. Without this an undone import leaves 'field X came
+                # from file Y' claims behind for students that no longer exist,
+                # and a later re-import reads them as an older source.
+                for p in existing_provenance:
+                    cols = [k for k in p if k != 'id']
+                    placeholders = ', '.join(['%s'] * len(cols))
+                    col_names    = ', '.join([f'`{c}`' for c in cols])
+                    values       = [p[c] for c in cols]
+                    cur.execute(
+                        f"INSERT INTO student_field_sources ({col_names}) VALUES ({placeholders})",
+                        values
+                    )
+
+                # 3e. An undone import must also un-say "this file is in the
+                # database": the card would keep claiming 'Imported' over data
+                # that no longer exists. Back to the upload-time state lets staff
+                # re-import it once the cache is gone.
+                if upload_filename:
+                    cur.execute(
+                        "UPDATE uploaded_files SET db_status='pending', row_count=NULL, "
+                        "students_saved=NULL, marks_saved=NULL, gpa_rows=NULL "
+                        "WHERE filename=%s AND trashed_at IS NULL",
+                        (upload_filename,)
+                    )
 
                 # 3b. FILE_DELETE undo: restore provenance rows and uploaded_files row
                 if snapshot_data.get('operation_subtype') == 'FILE_DELETE' or \
@@ -689,6 +849,7 @@ def restore_student(token: str, current_user: dict = Depends(get_current_user)):
         summary=(
             f"Undo of {record['operation_type']} succeeded. "
             f"Reverted {reverted_adds} new insert(s), {reverted_updates} update(s). "
+            f"Rows put back: {', '.join(f'{k}={v}' for k, v in restored.items())}. "
             f"Performed by: {current_user['username']}"
         ),
     )
@@ -704,6 +865,7 @@ def restore_student(token: str, current_user: dict = Depends(get_current_user)):
         "operation_type": canonical_operation_type(record['operation_type']),
         "reverted_inserts": reverted_adds,
         "reverted_updates": reverted_updates,
+        "restored": restored,
     }
 
 
@@ -737,11 +899,24 @@ def get_activity(current_user: dict = Depends(get_current_user)):
         cur = conn.cursor(dictionary=True)
 
         # Searches
-        cur.execute(
-            "SELECT id, natural_query, user_role AS actor, timestamp "
-            "FROM query_history ORDER BY timestamp DESC LIMIT 10"
-        )
-        searches = cur.fetchall()
+        if current_user.get("role") == "Admin":
+            cur.execute(
+                "SELECT id, natural_query, user_role AS actor, timestamp "
+                "FROM query_history ORDER BY timestamp DESC LIMIT 10"
+            )
+            searches = cur.fetchall()
+        else:
+            # Same rule as /api/query/history: a query is another clerk's working
+            # notes, and its text can contain the contact number they were looking
+            # up. query_history records a role, not a username, so a non-Admin sees
+            # the searches made from their own role.
+            cur.execute(
+                "SELECT id, natural_query, user_role AS actor, timestamp "
+                "FROM query_history WHERE user_role=%s "
+                "ORDER BY timestamp DESC LIMIT 10",
+                (current_user.get("role"),),
+            )
+            searches = cur.fetchall()
 
         # Global Undo Snapshots (CRUD edits)
         cur.execute(
@@ -822,10 +997,15 @@ def get_activity(current_user: dict = Depends(get_current_user)):
                 "table": "students table",
             })
 
+        # An undo token is a capability: whoever presents it asks the server to
+        # roll that operation back. Only the operator who made the change (and an
+        # Admin, for file Trash) is handed the token; the activity feed still
+        # shows the operation itself, so nothing disappears from the audit trail.
+        token = s["undo_token"] if _may_act_on_undo(s, current_user) else None
         card = {
             "id": s["id"],
             "operation_id": s["undo_token"],
-            "undo_token": s["undo_token"],
+            "undo_token": token,
             "operation_type": canonical_operation_type(s["operation_type"]),
             "actor": s["actor"],
             "timestamp": str(s["timestamp"]),
@@ -842,7 +1022,7 @@ def get_activity(current_user: dict = Depends(get_current_user)):
             card["added_by"] = s["actor"]
         elif operation_type == "DELETE":
             card["deleted_by"] = s["actor"]
-            card["restore_token"] = s["undo_token"]
+            card["restore_token"] = token
 
         if s["undone"]:
             card["status"] = "UNDONE"
@@ -943,8 +1123,16 @@ def get_student_history(usn: str, current_user: dict = Depends(get_current_user)
         rows = cur.fetchall()
         cur.close()
 
+    # A change history quotes the old and new value of the edited field. When
+    # that field is a contact number or Aadhaar, the quotation follows the same
+    # role policy as the profile screen that shows the live value.
     for r in rows:
         if r.get('updated_at'):
             r['updated_at'] = str(r['updated_at'])
+        field = r.get('field_name') or ''
+        for key in ('old_value', 'new_value'):
+            if r.get(key) is not None:
+                r[key] = report_service.mask_value_for_role(
+                    field, r[key], current_user.get('role'))
 
     return rows

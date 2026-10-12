@@ -10,9 +10,12 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from database import db_conn, write_audit_log
+from config import settings
 from auth import get_current_user, require_roles
+from report_service import mask_rows_for_role
 from rag_sql_generator import (
     generate_sql_query,
+    _BRANCH_NORMALIZATION,
     _detect_target_semester as _rag_detect_semester,
     _extract_branches as _rag_extract_branches,
     _normalize_branch as _rag_normalize_branch,
@@ -62,6 +65,7 @@ from kannada_processor import (
     normalize_query as kn_normalize_query,
     is_complete_profile_intent,
     detect_language as kn_detect_language,
+    is_structural_word as kn_is_structural_word,
     get_response_labels,
 )
 
@@ -204,11 +208,11 @@ def _extract_target_and_field(left: str) -> tuple[str, str]:
 
 def _match_update_field_prefix(text: str) -> tuple[str, str] | None:
     """Recognize a field at the start of a subsequent update segment."""
-    candidate_text = re.sub(r'^\s*to\s+', '', text.strip(), flags=re.I)
+    candidate_text = re.sub(r'^\s*(?:to|as)\s+', '', text.strip(), flags=re.I)
     words = candidate_text.split()
     best_match = None
     for count in range(1, len(words) + 1):
-        if words[count - 1].lower() == 'to':
+        if words[count - 1].lower() in ('to', 'as'):
             break
         field_text = ' '.join(words[:count])
         canonical, _, confidence, _ = map_column(field_text)
@@ -216,7 +220,7 @@ def _match_update_field_prefix(text: str) -> tuple[str, str] | None:
             continue
         if confidence >= 0.8 or confidence == 0.0:
             value_start = count
-            if value_start < len(words) and words[value_start].lower() == 'to':
+            if value_start < len(words) and words[value_start].lower() in ('to', 'as'):
                 value_start += 1
             candidate = (
                 confidence,
@@ -278,14 +282,36 @@ def _strip_update_value_quotes(value: str, field: str) -> str:
     return value
 
 
+# Staff fill a blank field from the search bar with any of these verbs, and they
+# write "as" as often as "to" ("fill email of 9QA23CS001 as kid@college.edu").
+# Only "update"/"modify" are unambiguous edit imperatives: a softer verb whose
+# sentence does not parse as an assignment must fall back to the read path
+# instead of erroring ("enter Hassan district students" stays a search).
+_UPDATE_INTENT_RE = re.compile(
+    r'^\s*(update|modify|change|correct|set|fill\s*in|fill|put|enter|record|note|mark)\s+(.+)$',
+    re.I)
+_ASSIGNMENT_CONNECTOR_RE = re.compile(r'\b(?:to|as)\b', re.I)
+
+
 def _parse_update_assignments(natural_query: str) -> dict:
-    match = re.match(r'^\s*update\s+(.+)$', natural_query, re.I)
+    match = _UPDATE_INTENT_RE.match(natural_query)
     if not match:
         return None
-    payload = match.group(1).strip()
-    first_to = re.search(r'\bto\b', payload, re.I)
+    strong_verb = match.group(1).lower() in ('update', 'modify')
+    try:
+        return _parse_update_payload(match.group(2).strip(), strong_verb)
+    except HTTPException:
+        if strong_verb:
+            raise
+        return None
+
+
+def _parse_update_payload(payload: str, strong_verb: bool) -> dict:
+    first_to = _ASSIGNMENT_CONNECTOR_RE.search(payload)
     if not first_to:
-        raise HTTPException(400, "Please specify the information to update.")
+        if strong_verb:
+            raise HTTPException(400, "Please specify the information to update.")
+        return None
 
     left = payload[:first_to.start()].strip()
     remainder = payload[first_to.end():].strip()
@@ -388,13 +414,20 @@ def _match_student(target_text: str) -> dict:
     return {'type': 'NAME', 'ambiguous': suggestions}
 
 
+# The USN is the permanent identity key of a student record: every child table,
+# undo snapshot and audit row references it, so editing it must be refused with
+# a reason the staff member can act on, not a generic "field not found".
+_USN_IMMUTABLE_MSG = ("The USN is a student's permanent identity and cannot be "
+                      "edited.")
+
+
 def _resolve_assignment(conn, student: dict, assignment: dict) -> dict:
     raw_field = assignment['field_text']
     raw_value = assignment['value_text']
     canonical, mapping_type, confidence, _ = map_column(raw_field)
     canonical_norm = normalize_header(raw_field)
     if canonical == 'usn':
-        raise HTTPException(400, "Field not found.")
+        raise HTTPException(400, _USN_IMMUTABLE_MSG)
 
     table_columns = {
         'students': _load_table_columns(conn, 'students'),
@@ -448,7 +481,7 @@ def _resolve_assignment(conn, student: dict, assignment: dict) -> dict:
             raise HTTPException(400, f"Field '{raw_field}' is not available in the database.")
 
     if column in {'usn', 'student_id'} and table == 'students':
-        raise HTTPException(400, "Field not found.")
+        raise HTTPException(400, _USN_IMMUTABLE_MSG)
 
     current_semester = None
     if table == 'marks':
@@ -600,9 +633,11 @@ def _build_update_request(nq: str) -> dict | None:
     with db_conn() as conn:
         executions = []
         column_creations = []
+        resolved_all = []
         grouped = {}
         for assignment in parsed['assignments']:
             resolved = _resolve_assignment(conn, student, assignment)
+            resolved_all.append(resolved)
             table = resolved['table']
             sem = resolved.get('semester')
             key = (table, sem) if table == 'marks' else (table, None)
@@ -644,6 +679,16 @@ def _build_update_request(nq: str) -> dict | None:
         'student_usn': student['usn'],
         'student_name': student.get('name'),
         'original_query': nq,
+        # Staff confirm this dialog without reading SQL, so it has to name the
+        # student and every value that will change.
+        'message': (
+            f"{student.get('name') or student['usn']} ({student['usn']}): "
+            + ', '.join(
+                f"{r['column']} → "
+                + ('(blank)' if r['value'] is None
+                   else (str(r['value'])[:40] + '…' if len(str(r['value'])) > 40 else str(r['value'])))
+                for r in resolved_all)
+        ),
     }
 
 
@@ -801,9 +846,10 @@ def _unmapped_filter_clause(query: str) -> str | None:
     known_terms = {
         "student", "students", "lateral", "entry", "le", "direct", "second", "2nd",
         "branch", "department", "dept", "stream", "course", "cs", "cse", "is", "ise",
-        "ec", "ece", "cv", "me", "mech", "aiml", "ai", "ml", "eee", "civil",
+        "ec", "ece", "cv", "me", "mech", "aiml", "ai", "ml", "eee", "civil", "civ",
         "mechanical", "electronics", "information", "science", "computer", "semester", "sem", "blood", "group", "type",
         "a", "b", "ab", "o", "cgpa", "sgpa", "gpa", "age", "rural", "urban", "area",
+        "civ",
         "areas", "region", "regions", "village", "villages", "emergency", "contact", "phone",
         "number", "numbers", "mobile", "email", "address", "father", "mother", "name", "dob",
         "gender", "male", "female", "status", "active", "graduated", "available", "present", "entered", "recorded",
@@ -819,6 +865,9 @@ def _unmapped_filter_clause(query: str) -> str | None:
         "aadhar", "uid", "religion", "caste", "category", "sub", "subcaste", "year",
         "admission", "joining", "roll", "division", "section", "domain",
         "usn", "id", "record", "data", "info", "information", "details", "profile",
+        # backlogs/arrears are compiled into an EXISTS filter by this builder.
+        "backlog", "backlogs", "arrear", "arrears", "cleared",
+        "zero",
         "list", "show", "count", "how", "many", "all", "every", "some",
         # comparison operators & ranking/connective words — these never name a column,
         # so they must not trigger the "could not map" guard (e.g. "more than 8 cgpa").
@@ -835,6 +884,11 @@ def _unmapped_filter_clause(query: str) -> str | None:
         "without", "no", "missing", "absent", "lack", "lacking", "lacks", "empty",
         "unknown", "unavailable", "unset", "unfilled", "not", "doesn't", "dont",
         "doesnt", "don't", "hasn't", "hasnt", "haven't", "havent",
+        # Fee status is compiled into its own condition from student_fees, so
+        # these words are mapped and must not raise "could not map: paid".
+        "fee", "fees", "payment", "payments", "paid", "pay", "paying", "unpaid",
+        "pending", "due", "dues", "outstanding", "challan", "balance", "partial",
+        "partially", "baki",
     }
     # Terms the intent-field layer can resolve (plurals, contact/occupation
     # synonyms, Kannada/Romanized aliases) must never trip the guard, since the
@@ -914,15 +968,87 @@ def _unpaid_fee_usns() -> list[str]:
         return []
 
 
+# ── Exact lifecycle status naming (spec §9) ─────────────────────────────────
+# Naming one canonical status means THAT status, not the family around it:
+# "temporarily discontinued" is not "any discontinued student", and the
+# register's own labels ("Admission Cancelled", "Other") have to be askable.
+# Built lazily: lifecycle imports routes_query, so routes_query must not import
+# lifecycle at module level.
+_EXACT_STATUS_LABELS: list[tuple[str, re.Pattern]] | None = None
+
+
+def _exact_status_labels() -> list[tuple[str, re.Pattern]]:
+    global _EXACT_STATUS_LABELS
+    if _EXACT_STATUS_LABELS is None:
+        import lifecycle as LC
+        labels = []
+        # Longest label wins, so "temporarily discontinued" is not read as the
+        # shorter, wider "discontinued" family.
+        for status in sorted(LC.LIFECYCLE_STATUSES, key=len, reverse=True):
+            words = status.lower().replace("-", " ").replace("_", " ").split()
+            if len(words) < 2:
+                continue  # a bare 'active' / 'other' means too many things
+            if len(words) == 2:
+                # Tolerate one filler word between the halves: staff write
+                # "students whose admission was cancelled".
+                body = (re.escape(words[0]) + r"\W+(?:\w+\W+)?" + re.escape(words[1]))
+            else:
+                body = r"\W+".join(re.escape(w) for w in words)
+            labels.append((status, re.compile(r"\b" + body + r"\b", re.I)))
+        _EXACT_STATUS_LABELS = labels
+    return _EXACT_STATUS_LABELS
+
+
+# Words that carry no condition of their own. A question built only from these
+# plus a status word asks for that status and nothing else.
+_LIFECYCLE_QUESTION_FILLER = frozenset({
+    "show", "list", "display", "find", "get", "tell", "print", "me", "us", "please",
+    "how", "many", "much", "count", "number", "total", "all", "every", "each",
+    "the", "a", "an", "of", "for", "to", "in", "with", "and", "or", "is", "are",
+    "was", "were", "who", "that", "this", "students", "student", "currently",
+    "now", "only", "just", "status", "lifecycle", "life", "cycle", "marked",
+    "recorded", "their", "his", "her", "s",
+})
+
+
+def _bare_lifecycle_status(eq: str) -> str | None:
+    """'Active' and 'Other' are also ordinary English words ('active backlogs',
+    'other branches'), so they name a lifecycle status only when the question
+    asks for nothing else. Any leftover condition word defers to the ordinary
+    pipeline, which knows backlogs, fees, semesters and rankings."""
+    toks = [t for t in re.split(r"[^a-z0-9]+", (eq or "").lower()) if t]
+    if not toks:
+        return None
+    import lifecycle as LC
+    for status in (LC.STATUS_ACTIVE, LC.STATUS_OTHER):
+        word = status.lower()
+        if word in toks and not set(toks) - (_LIFECYCLE_QUESTION_FILLER | {word}):
+            return status
+    return None
+
+
+def _explicit_lifecycle_status(eq: str) -> str | None:
+    return (_exact_status_label(eq) or _bare_lifecycle_status(eq))
+
+
+def _exact_status_label(eq: str) -> str | None:
+    for status, rx in _exact_status_labels():
+        if rx.search(eq or ""):
+            return status
+    return None
+
+
 def _build_lifecycle_query(nq: str) -> dict | None:
     """Deterministic SQL for Student Lifecycle intents (spec §9): dropout,
     discontinued, readmission pending/approved-not-joined, rejoined, cleared
     backlog after rejoining, per-semester counts, incomplete lifecycle records,
     and a single student's complete status history.
 
-    Reads the derived current status via students.lifecycle_status (kept in sync
-    by the audited lifecycle endpoints) joined to student_lifecycle_status for the
-    effective/enrolled detail. This is READ-only; it never mutates anything. When
+    Reads the current status from the same expression the Lifecycle register
+    answers with — COALESCE(student_lifecycle_status.current_status,
+    students.lifecycle_status) — so a status question and the register can never
+    disagree, and joins student_lifecycle_status for the effective/enrolled
+    detail. This is READ-only; it never mutates anything. When
     no lifecycle keyword is present it returns None so the ordinary pipeline
     (backlogs / fees / demographics / LLM) proceeds untouched.
     """
@@ -1014,9 +1140,18 @@ def _build_lifecycle_query(nq: str) -> dict | None:
     _fees_pending = bool(re.search(r'\bfees?\b|\bpayment\b|\boutstanding\b|\barrears?\b|\bdue\b(?! to)', eq)) and \
                     bool(re.search(r'\bpending\b|\bunpaid\b|\bdue\b(?! to)|\bnot\s+paid\b|\bbaki\b', eq))
 
-    # Which lifecycle status set to filter on.
+    # Which lifecycle status set to filter on. An exactly-named canonical status
+    # wins over the family keywords, so "temporarily discontinued" is not widened
+    # to every discontinued/dropout student.
+    _exact = _explicit_lifecycle_status(eq)
     status_set: list[str] = []
-    if _readmit_app and _not_joined:
+    if _exact and _rejoined and _exact in LC.DISCONTINUED_STATUSES:
+        # "temporarily discontinued students who later rejoined" is a Rejoined
+        # register with a prior discontinuation behind it.
+        status_set = [LC.STATUS_REJOINED]
+    elif _exact:
+        status_set = [_exact]
+    elif _readmit_app and _not_joined:
         status_set = [LC.STATUS_READMISSION_APPROVED]
     elif _readmit_req:
         status_set = [LC.STATUS_READMISSION_REQUESTED]
@@ -1045,7 +1180,13 @@ def _build_lifecycle_query(nq: str) -> dict | None:
     placeholders = ",".join(["%s"] * len(status_set))
     base_join = ("FROM students s "
                  "LEFT JOIN student_lifecycle_status ls ON ls.usn = s.usn")
-    status_flt = f"s.lifecycle_status IN ({placeholders})"
+    # One definition of "current status" for the whole product: the derived
+    # register with the student row as fallback, which is the exact expression
+    # /lifecycle/list answers with. Filtering only on students.lifecycle_status
+    # made a student whose two sources disagree — e.g. a status change undone
+    # before the register was re-synced — findable under the stale status and
+    # invisible under the one the Lifecycle tab shows.
+    status_flt = f"COALESCE(ls.current_status, s.lifecycle_status) IN ({placeholders})"
     where = status_flt + _sem_flt + _batch_flt + _yr_flt + _reason_flt + _rejoin_discont_flt
 
     params = list(status_set)
@@ -1083,7 +1224,8 @@ def _build_lifecycle_query(nq: str) -> dict | None:
     _cgpa_expr = ("ROUND(COALESCE((SELECT AVG(mm.sgpa) FROM marks mm "
                   "WHERE mm.usn=s.usn AND mm.sgpa IS NOT NULL), s.cgpa), 2)")
     proj = (f"SELECT DISTINCT s.usn, s.name, s.branch, s.admission_year, "
-            f"s.student_type, s.lifecycle_status AS current_status, "
+            f"s.student_type, "
+            f"COALESCE(ls.current_status, s.lifecycle_status) AS current_status, "
             f"ls.effective_date, ls.last_enrolled_semester AS last_semester, "
             f"ls.last_enrolled_academic_year AS last_academic_year, "
             f"ls.scheme, ls.reason, {_cgpa_expr} AS cgpa "
@@ -1217,6 +1359,370 @@ def _is_bare_contact_listing(nq: str) -> bool:
     return not (toks - _CONTACT_FILLER)
 
 
+# A student-level filter that must not be dropped when it appears next to a
+# single-topic question ("CS students having zero backlogs" is a branch filter
+# AND a backlog filter, not just a backlog question).
+_COMPANION_FILTER_RE = re.compile(
+    r"\b(?:cgpa|sgpa|percentage|marks|district|taluk|village|state|urban|rural|"
+    r"male|female|girls?|boys?|gender|blood\s*group|age[ds]?\s+\d|\d+\s*years?\s*old|"
+    r"active|graduat\w*|dropout|drop\s*out|discontinu\w*|re-?admission|re-?join\w*|"
+    r"transferred|lateral|regular|bonafide|fee|fees|paid|unpaid|admission\s+year|"
+    r"batch|year\s+of\s+joining|from\s+the\s+\d{4}\s+(?:batch|year))\b",
+    re.IGNORECASE,
+)
+
+
+def _has_companion_filters(eq: str) -> bool:
+    """True when the question asks for more than the topic it names."""
+    if _COMPANION_FILTER_RE.search(eq):
+        return True
+    if _rag_extract_branches(eq):
+        return True
+    # A place name is a filter even when the word "district" is not typed:
+    # "students with no backlogs from Hassan" must not lose Hassan.
+    for column in ("district", "village", "taluk", "state"):
+        for value in _column_values(column):
+            if len(value) >= 4 and re.search(rf"\b{re.escape(value.casefold())}\b", eq):
+                return True
+    return False
+
+
+def _backlog_student_filter_sql(eq: str) -> tuple[str, list] | None:
+    """WHERE fragment (on the `s` alias) expressing a backlog/arrears request.
+
+    Kept separate from the standalone backlog queries, which answer with one row
+    per backlog subject: this is the student-level form used when the request
+    also carries other filters that must survive.
+    """
+    if not re.search(r"\bbacklog(?:s)?\b|\barrear(?:s)?\b", eq):
+        return None
+    if re.search(r"\b(?:without|no|zero|not\s+have|not\s+having|don'?t\s+have|"
+                 r"have\s+no|has\s+no)\b", eq):
+        return ("s.usn NOT IN (SELECT usn FROM student_backlogs WHERE cleared=0)", [])
+    inner = ["cleared=0"]
+    params: list = []
+    _subj_sem = ("NULLIF(CAST(NULLIF(REGEXP_SUBSTR(LOWER(subject), "
+                 "'[1-8](st|nd|rd|th)?[ ]?sem'), '') AS UNSIGNED), 0)")
+    sem_m = re.search(r"\b(\d+)(?:st|nd|rd|th)?\s*(?:sem(?:ester)?)\b", eq)
+    if sem_m:
+        inner.append(f"COALESCE(NULLIF(semester, 0), {_subj_sem}) = {int(sem_m.group(1))}")
+    subj_m = re.search(
+        r"\bbacklogs?\s+(?:in|of|for|on|subject(?:s)?(?:\s+is|\s+are)?|)\s+"
+        r"([a-z][a-z ]*?)"
+        r"(?=\s+(?:students?|student|list|show|display|who|have|has|having|please|\?|$)|[,;.]|$)",
+        eq)
+    if subj_m:
+        subject = re.sub(r"\b(?:the|a|an|subject|is|are)\b", "",
+                         subj_m.group(1).strip()).strip()
+        if subject:
+            inner.append("REPLACE(LOWER(subject), ' ', '') LIKE %s")
+            params.append(f"%{subject.replace(' ', '')}%")
+    return ("s.usn IN (SELECT usn FROM student_backlogs WHERE "
+            + " AND ".join(inner) + ")", params)
+
+
+# Columns whose values come from the college's own typed-in data. Staff spell
+# these differently every day ("Dharwad"/"Dhrwd", "Hindhu"/"Hindu") and the
+# imported sheets themselves carry typos, so a filter value that matches nothing
+# is resolved against the values that actually exist instead of returning zero
+# rows. Only positive operators are corrected — a negated filter keeps the
+# literal the user asked for.
+_FUZZY_VALUE_COLUMNS = {
+    "district", "village", "taluk", "state", "area", "region", "caste",
+    "sub_caste", "religion", "category", "father_occupation",
+    "mother_occupation", "student_type", "kannada_medium", "blood_group",
+    "branch", "division", "domain",
+}
+_DISTINCT_VALUES: dict[tuple[str, str], list[str]] = {}
+
+
+def _column_values(column: str) -> list[str]:
+    key = (str(settings.MYSQL_DB), column)
+    cached = _DISTINCT_VALUES.get(key)
+    if cached is not None:
+        return cached
+    values: list[str] = []
+    try:
+        with db_conn() as conn:
+            cur = conn.cursor()
+            # `column` is from _FUZZY_VALUE_COLUMNS, never from user input.
+            cur.execute(
+                f"SELECT DISTINCT `{column}` FROM students "
+                f"WHERE `{column}` IS NOT NULL AND TRIM(`{column}`) <> ''")
+            values = [str(r[0]).strip() for r in cur.fetchall() if str(r[0]).strip()]
+            cur.close()
+    except Exception:
+        values = []
+    _DISTINCT_VALUES[key] = values
+    return values
+
+
+def _closest_column_value(column: str, term: str) -> str | None:
+    """Real DB value closest to a mistyped one, or None if the term already
+    matches a value (then nothing is wrong) or nothing is close enough."""
+    known = _column_values(column)
+    if not known or not str(term).strip():
+        return None
+    needle = str(term).strip().casefold()
+    folded = {k: k.casefold() for k in known}
+    for cand in folded.values():
+        if needle == cand or needle in cand:
+            return None
+        # A real value written inside a longer phrase ("haveri district") already
+        # matches. A value with typo debris glued onto it ("haveridd") does not:
+        # require the whole-word form before calling it good.
+        if cand in needle and re.search(
+                rf"(?<![a-z0-9]){re.escape(cand)}(?![a-z0-9])", needle):
+            return None
+    best, score = None, 0.0
+    for original, cand in folded.items():
+        ratio = difflib.SequenceMatcher(None, needle, cand).ratio()
+        common = {w for w in re.split(r"[^a-z0-9]+", cand) if w} & \
+                 {w for w in re.split(r"[^a-z0-9]+", needle) if w}
+        if common:
+            ratio = max(ratio, 0.75 + 0.05 * len(common))
+        if ratio > score:
+            best, score = original, ratio
+    return best if score >= 0.6 else None
+
+
+def _best_value_match(column: str, term: str) -> tuple[str | None, float]:
+    needle = str(term).strip().casefold()
+    if not needle:
+        return None, 0.0
+    best, score = None, 0.0
+    for known in _column_values(column):
+        ratio = difflib.SequenceMatcher(None, needle, known.casefold()).ratio()
+        if ratio > score:
+            best, score = known, ratio
+    return best, score
+
+
+# A stray space inside a value ("Have ri" for Haveri) splits it into two tokens
+# that match nothing; the glued form matches a real value almost exactly.
+_SPLIT_VALUE_MIN_RATIO = 0.86
+
+
+def _repair_split_values(text: str) -> str:
+    """Join column values typed with an extra space inside the word."""
+    parts = re.split(r"(\s+)", text)
+    changed = False
+    for i in range(len(parts) - 2):
+        first, sep, second = parts[i], parts[i + 1], parts[i + 2]
+        if sep.strip():
+            continue
+        if not all(re.fullmatch(r"[A-Za-z][A-Za-z']{1,14}", w)
+                   for w in (first, second)):
+            continue
+        for column in sorted(_FUZZY_VALUE_COLUMNS):
+            value, score = _best_value_match(column, first + second)
+            if score < _SPLIT_VALUE_MIN_RATIO:
+                continue
+            half = max(_best_value_match(column, first)[1],
+                       _best_value_match(column, second)[1])
+            if half >= score:
+                continue
+            parts[i], parts[i + 2] = value, ""
+            changed = True
+            break
+    if not changed:
+        return text
+    return re.sub(r"\s{2,}", " ", "".join(parts)).strip()
+
+
+def _fuzzy_filter_value(field: str, operator: str, values: list):
+    """Correct one filter literal against the column's real values.
+
+    Returns (values, [(asked, understood), ...]). LIKE wildcards are preserved so
+    the corrected value stays inside the same SQL fragment.
+    """
+    if field not in _FUZZY_VALUE_COLUMNS or operator not in (
+            "CONTAINS", "EQUALS", "IN", "LIKE", "STARTS_WITH"):
+        return values, []
+    notes = []
+    fixed = []
+    for raw in values:
+        text = str(raw)
+        inner = text.strip("%")
+        if not inner or inner.isdigit():
+            fixed.append(raw)
+            continue
+        best = _closest_column_value(field, inner)
+        if best:
+            fixed.append(text.replace(inner, best))
+            notes.append((inner, best))
+        else:
+            fixed.append(raw)
+    return fixed, notes
+
+
+# Words staff type for a numeric threshold. The alternation is built longest-form
+# first, because a regex picks the first alternative, not the longest: reading
+# "greater than or equal to" as "greater than" leaves "or equal to 7" behind, and
+# the whole condition used to be dropped, answering with every student in the
+# database instead of the ones asked for.
+_OP_SYNONYMS = {
+    "greater than or equal to": ">=", "greater than or equals to": ">=",
+    "greater than or equal": ">=", "more than or equal to": ">=",
+    "is not less than": ">=", "not less than": ">=", "no less than": ">=",
+    "not below": ">=", "at least": ">=", "atleast": ">=", "or equal to": ">=",
+    "or above": ">=", "or over": ">=", "or older": ">=", "minimum": ">=",
+    "and above": ">=", "not younger than": ">=", "or equal": ">=",
+    "no smaller than": ">=",
+    "greater than": ">", "more than": ">", "older than": ">",
+    "exceeds": ">", "exceed": ">", "not fewer than": ">=", "fewer than": "<",
+    "above": ">", "over": ">", "greater": ">", "more": ">", "mele": ">", "mela": ">",
+    "less than or equal to": "<=", "less than or equals to": "<=",
+    "less than or equal": "<=", "fewer than or equal to": "<=",
+    "is not greater than": "<=", "not greater than": "<=", "not more than": "<=",
+    "no more than": "<=", "not above": "<=", "at most": "<=", "atmost": "<=",
+    # "cgpa up to 7" is the inclusive ceiling staff use most often; without these
+    # forms the threshold parsed to nothing and the question was answered as
+    # "students who have any CGPA at all" — every row in the table.
+    "up to": "<=", "upto": "<=", "up-to": "<=", "or up to": "<=", "within": "<=",
+    "not over": "<=", "no greater than": "<=", "or under": "<=", "or fewer": "<=",
+    "till": "<=", "until": "<=", "and below": "<=",
+    "maximum": "<=", "younger than": "<", "or below": "<=", "or younger": "<=",
+    "or less": "<=", "less than": "<", "below": "<", "under": "<", "less": "<",
+    "equal to": "=", "equals to": "=", "equals": "=", "equal": "=", "exactly": "=",
+    ">=": ">=", "=>": ">=", "<=": "<=", "=<": "<=", "==": "=", ">": ">", "<": "<",
+    "=": "=",
+}
+_OP_WORD = r"(?:" + "|".join(
+    re.escape(k) for k in sorted(_OP_SYNONYMS, key=lambda k: (-len(k), k))) + r")"
+# "cgpa is above 7" / "age of at least 18": staff insert a linking word between
+# the field and the operator, which must not break the match.
+_COPULA = r"(?:is\s+|are\s+|was\s+|were\s+|of\s+|as\s+|be\s+|being\s+)?"
+_NUM_RE = r"(\d+(?:\.\d+)?)"
+
+
+def _comparison_match(query: str, field_words: str) -> tuple[str, float, re.Match] | None:
+    """Match a numeric threshold either field-first ("cgpa above 7",
+    "age is at least 18") or value-first ("at least 7 cgpa").
+
+    Returns (SQL operator, value, match). The match is returned so callers can
+    inspect the text right after the number ("18 or older").
+    """
+    field_first = re.search(
+        rf"\b(?:{field_words})\s*{_COPULA}(?:(not)\s+)?({_OP_WORD})?\s*(?:of\s+)?{_NUM_RE}",
+        query)
+    if field_first:
+        negation, word, raw = field_first.group(1), field_first.group(2), field_first.group(3)
+        return _operator_of(negation, word), float(raw), field_first
+    value_first = re.search(
+        rf"(?:(not)\s+)?({_OP_WORD})\s*{_NUM_RE}\s*(?:of\s+)?(?:{field_words})\b",
+        query)
+    if value_first:
+        negation, word, raw = value_first.groups()
+        return _operator_of(negation, word), float(raw), value_first
+    return None
+
+
+def _operator_of(negation: str | None, word: str | None) -> str:
+    operator = _OP_SYNONYMS.get((word or "").casefold().strip(), "=")
+    if negation:
+        operator = {"<": ">=", ">": "<=", "=": "NOT_EQUALS"}.get(operator, operator)
+    return operator
+
+
+_FEE_TOPIC_RE = re.compile(
+    r"\bfees?\b|\bfee\b|\bpayment\b|\bchallan\b|\bdues?\b|\boutstanding\b|"
+    r"\bpaid\b|\bunpaid\b|\bpending\b",
+    re.I,
+)
+
+
+def _fee_status_target(query: str) -> str | None:
+    """Which fee-status class the question asks about, or None.
+
+    'paid_all' is kept apart from 'paid' on purpose: "has paid all fees" means no
+    unpaid row left behind, while "students who paid fees" means at least one row
+    was paid. A student with one paid and one pending row qualifies for the
+    second reading and must not appear in the first.
+    """
+    if not _FEE_TOPIC_RE.search(query):
+        return None
+    if re.search(r"\bpartial(?:ly)?\b|\bpart\s+paid\b|\bsome\s+(?:amount\s+)?paid\b", query):
+        return "partial"
+    if re.search(
+            r"\ball\s+fees?\s+paid\b|\bfees?\s+(?:are\s+|is\s+)?(?:fully|complete|entire)"
+            r"\w*\s+paid\b|\bpaid\s+(?:all|everything|the\s+full|the\s+entire|complete)"
+            r"\w*\b|\bno\s+(?:due|dues|balance|pending|remaining|outstanding)\b|"
+            r"\bfees?\s+(?:cleared|done|completed)\b|\bfully\s+paid\b|\bclear(?:ed)?\s+fees?\b",
+            query):
+        return "paid_all"
+    if re.search(
+            r"\b(?:not\s+(?:paid|pay|cleared|done|yet)|haven'?t\s+paid|didn'?t\s+pay|"
+            r"unpaid|not\s+paid|pending|due|dues|outstanding|balance\s+(?:left|there|remain)?"
+            r"|baki)\b",
+            query):
+        return "unpaid"
+    if re.search(
+            r"\b(?:fully\s+paid|full\s+amount\s+paid|fees?\s+paid|already\s+paid|cleared|paid)\b",
+            query):
+        return "paid"
+    return None
+
+
+def _fee_status_usns(target: str) -> list[str]:
+    """USNs whose fee rows normalise to this status class (report_service rule).
+
+    The messy stored spellings ("No", "not paid", "-", "Balance 5000") are
+    canonicalised in Python by the same helper the reports use, so the NL list,
+    the profile FEE DETAILS section and the exports can never disagree.
+    """
+    import report_service
+    with db_conn() as conn:
+        cur = conn.cursor(dictionary=True)
+        cur.execute("SELECT DISTINCT usn, status FROM student_fees WHERE usn IS NOT NULL")
+        rows = cur.fetchall()
+        cur.close()
+    unpaid_seen: set[str] = set()
+    matched: list[str] = []
+    matched_seen: set[str] = set()
+    for row in rows:
+        canon, _ = report_service.normalize_fee_status(row.get("status"))
+        usn = row.get("usn")
+        if not usn:
+            continue
+        if canon == "unpaid":
+            unpaid_seen.add(usn)
+        if canon == target and usn not in matched_seen:
+            matched_seen.add(usn)
+            matched.append(usn)
+    if target == "paid_all":
+        with db_conn() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT usn FROM students")
+            all_usns = [r[0] for r in cur.fetchall()]
+            cur.close()
+        return [usn for usn in all_usns if usn not in unpaid_seen]
+    return matched
+
+
+def _has_companion_student_filter(query: str) -> bool:
+    """True when the question also restricts students by a students-table field.
+
+    The fee-status path answers from a fixed query of its own, so any extra
+    condition (district, gender, caste, CGPA…) has to be left to the main filter
+    engine, which composes all conditions together.
+    """
+    return bool(re.search(
+        r"\bdistrict(?:s)?\b|\btaluk(?:s)?\b|\bvillage(?:s)?\b|\btehsil(?:s)?\b|"
+        r"\bmandal(?:s)?\b|\bstate\b|\bzone\b|\b(?:rural|urban)\b|"
+        r"\b(?:male|female|girls?|boys?|women|men|ladies)\b|"
+        r"\bbranch(?:es)?\b|\bdepartment(?:s)?\b|\b(?:cse|ece|ise|cv|mech|civil|"
+        r"mechanical|computer\s+science|electronics|information\s+science)\b|"
+        r"\bsem(?:ester)?\b|\b(?:cgpa|sgpa|gpa)\b|\bcumulative\s+gpa\b|"
+        r"\bcaste\b|\breligion\b|\brelegion\b|\bcategory\b|\bcaste\b|"
+        r"\baged?\b|\byears?\s+old\b|\blateral\b|\bactive\b|\bgraduated\b|"
+        r"\bblood\s+(?:group|type)\b|\bquota\b|\bbacklogs?\b|\barrears?\b|"
+        r"\bkannada\s+medium\b|\bphysically\b|\bdistance\b|\bkm\b|"
+        r"\baadhar\b|\bphone\b|\bmobile\b|\bemail\b|\boccupation\b",
+        query, re.I,
+    ))
+
+
 def _build_dynamic_field_query(nq: str) -> dict | None:
     """
     Build deterministic SQL for new Google Form fields.
@@ -1233,47 +1739,32 @@ def _build_dynamic_field_query(nq: str) -> dict | None:
     # qualifies when at least one of their fee rows normalizes to the requested
     # class. Blank / "none" / "not applicable" rows are never treated as unpaid
     # (spec §7). Fees are matched on status only — no balance is ever invented.
-    if re.search(r'\bfees?\b|\bfee\b|\bpayment\b|\bchallan\b|\bdues?\b|\boutstanding\b|\bpaid\b|\bunpaid\b|\bpending\b', eq):
-        _partial = bool(re.search(r'\bpartial(?:ly)?\b|\bpart\s+paid\b', eq))
-        _negated = bool(re.search(
-            r"\b(?:not\s+(?:paid|pay|cleared|done|yet)|haven'?t\s+paid|didn'?t\s+pay|"
-            r"unpaid|not\s+paid|pending|due|dues|outstanding|balance\s+(?:left|there|remain)?|baki)\b", eq))
-        _positive = bool(re.search(
-            r"\b(?:fully\s+paid|full\s+amount\s+paid|fees?\s+paid|already\s+paid|cleared|"
-            r"no\s+(?:due|balance|pending|remaining)|paid)\b", eq))
-        _target = None
-        if _partial:
-            _target = "partial"
-        elif _negated:
-            _target = "unpaid"
-        elif _positive:
-            _target = "paid"
-        if _target:
-            import report_service
-            matched: list[str] = []
-            with db_conn() as _fc:
-                _fcur = _fc.cursor(dictionary=True)
-                _fcur.execute("SELECT DISTINCT usn, status FROM student_fees WHERE usn IS NOT NULL")
-                _seen = set()
-                for _r in _fcur.fetchall():
-                    _canon, _ = report_service.normalize_fee_status(_r.get("status"))
-                    if _canon == _target and _r["usn"] not in _seen:
-                        _seen.add(_r["usn"]); matched.append(_r["usn"])
-                _fcur.close()
-            if is_count:
-                if not matched:
-                    return {"operation": "select", "sql": "SELECT 0 AS students_" + _target + "_fees", "params": []}
-                _ph = ", ".join(["%s"] * len(matched))
-                return {"operation": "select", "sql": f"SELECT COUNT(DISTINCT usn) AS students_{_target}_fees FROM student_fees WHERE usn IN ({_ph})", "params": matched}
+    # A fee question that also restricts students by district, gender, caste, CGPA
+    # or any other students-table field must go through the main filter engine,
+    # which composes every condition. Answering it here dropped those conditions
+    # ("students from Haveri who have not paid fees" listed unpaid students of
+    # every district), and narrowing the projection to the dropped filter then
+    # removed the fee columns the ORDER BY still referenced (MySQL 3065).
+    # "paid all fees" needs the same engine, because it excludes students who have
+    # an unpaid row even when they also have a paid one.
+    _fee_target = _fee_status_target(eq) if _FEE_TOPIC_RE.search(eq) else None
+    if _fee_target and _fee_target != "paid_all" \
+            and not _has_companion_student_filter(eq):
+        matched = _fee_status_usns(_fee_target)
+        if is_count:
             if not matched:
-                return {"operation": "select", "sql": "SELECT s.usn, s.name FROM students s WHERE s.usn IN (NULL) ORDER BY s.usn ASC", "params": []}
+                return {"operation": "select", "sql": "SELECT 0 AS students_" + _fee_target + "_fees", "params": []}
             _ph = ", ".join(["%s"] * len(matched))
-            return {"operation": "select", "sql": (
-                f"SELECT DISTINCT s.usn, s.name, s.branch, sf.fee_type, sf.year, "
-                f"sf.status AS fee_status, sf.amount_paid, sf.remaining_amount "
-                f"FROM students s JOIN student_fees sf ON sf.usn = s.usn "
-                f"WHERE s.usn IN ({_ph}) ORDER BY s.usn ASC, sf.fee_type ASC, sf.year ASC"
-            ), "params": matched}
+            return {"operation": "select", "sql": f"SELECT COUNT(DISTINCT usn) AS students_{_fee_target}_fees FROM student_fees WHERE usn IN ({_ph})", "params": matched}
+        if not matched:
+            return {"operation": "select", "sql": "SELECT s.usn, s.name FROM students s WHERE s.usn IN (NULL) ORDER BY s.usn ASC", "params": []}
+        _ph = ", ".join(["%s"] * len(matched))
+        return {"operation": "select", "sql": (
+            f"SELECT DISTINCT s.usn, s.name, s.branch, sf.fee_type, sf.year, "
+            f"sf.status AS fee_status, sf.amount_paid, sf.remaining_amount "
+            f"FROM students s JOIN student_fees sf ON sf.usn = s.usn "
+            f"WHERE s.usn IN ({_ph}) ORDER BY s.usn ASC, sf.fee_type ASC, sf.year ASC"
+        ), "params": matched}
 
     # ── Incomplete personal details ──────────────────────────────────────────
 
@@ -1327,6 +1818,12 @@ def _build_dynamic_field_query(nq: str) -> dict | None:
 
     # ── Backlogs ──────────────────────────────────────────────────────────────
     if re.search(r'\bbacklog(?:s)?\b|\barrear(?:s)?\b', eq):
+        # These answers are one row per backlog subject and deliberately carry no
+        # other filter, so a combined request ("active CS students in semester 6
+        # from Hassan with zero backlogs") must go to the combined engine instead
+        # of silently losing branch/semester/CGPA/district here.
+        if _has_companion_filters(eq):
+            return None
         no_bl   = bool(re.search(r'\b(?:without|no|zero|0|not\s+have|not\s+having|don.t\s+have)\b', eq))
         CS_EXPR, _ = _current_academic_fields_sql("s")
         # A backlog's semester is often left out of sb.semester but written into the
@@ -1387,6 +1884,25 @@ def _build_dynamic_field_query(nq: str) -> dict | None:
         value = ""
         if val_m:
             value = re.sub(r"\b(?:students?|having|with|whose|that|who|the|a|an)\b.*$", "", val_m.group(1)).strip()
+        if not value:
+            # "<value> father occupation" ("show Carpenter father occupation
+            # students"): the value sits BEFORE the keyword, which neither pattern
+            # above can see, so the question was answered as "any recorded
+            # occupation" — 56 rows instead of the 13 carpenters asked for. The
+            # candidate only counts when the column actually holds that word, so a
+            # bare listing request keeps its own answer.
+            pre_m = re.search(
+                r"^(?:(?:show|list|display|find|get|give|print|tell|me|count|how|many|"
+                r"number|of|all|the|only|details?|information|info|records?|profile|"
+                r"data|for|about|students?|student|whose|which|who|with|having|and|or)\s+)*"
+                r"(?P<value>[a-z][a-z ]{2,30}?)\s+"
+                r"(?:mother|father)(?:['’]s)?\s+(?:occupation|job|work|profession|designation)\b",
+                eq_occ)
+            candidate = pre_m.group("value").strip(" .'-") if pre_m else ""
+            if candidate:
+                matched, ratio = _best_value_match(field, candidate)
+                if matched and ratio >= 0.6:
+                    value = candidate
         if value:
             # spacing-tolerant so "house wife" also matches stored "housewife".
             return {"operation": "select", "sql": f"SELECT s.usn, s.name, s.{field} FROM students s WHERE REPLACE(LOWER(s.{field}), ' ', '') LIKE %s {order}", "params": [f"%{value.replace(' ', '')}%"]}
@@ -1564,6 +2080,7 @@ def build_deterministic_student_query(nq: str) -> dict | None:
     text = (nq or "").strip()
     if not text:
         return None
+    text = _repair_split_values(text)
 
     # ── Lifecycle intents (dropout / discontinued / readmission / rejoin) ──────
     # Runs BEFORE the fee/backlog/dynamic blocks so a query like "discontinued
@@ -1619,9 +2136,17 @@ def build_deterministic_student_query(nq: str) -> dict | None:
     params: list = []
     filter_conditions: list[dict] = []
 
+    value_corrections: list[tuple[str, str, str]] = []
+
     def add_filter_condition(field: str, operator: str, value, sql: str, values=()) -> None:
         if any(existing["field"] == field and existing["sql"] == sql for existing in filter_conditions):
             return
+        values, notes = _fuzzy_filter_value(field, operator, list(values))
+        if notes:
+            value_corrections.extend((field, asked, understood)
+                                     for asked, understood in notes)
+            if len(notes) == 1 and operator != "IN":
+                value = notes[0][1]
         filter_conditions.append({
             "field": field,
             "operator": operator,
@@ -1632,11 +2157,22 @@ def build_deterministic_student_query(nq: str) -> dict | None:
         where_clauses.append(sql)
         params.extend(values)
 
+    def _correction_message() -> str:
+        if not value_corrections:
+            return ""
+        return "Read as: " + ", ".join(
+            f"'{asked}' → '{understood}' ({field})"
+            for field, asked, understood in value_corrections) + "."
+
     selected_fields = ["s.usn", "s.name"]
     cgpa_expression = (
         "COALESCE((SELECT AVG(m.sgpa) FROM marks m WHERE m.usn=s.usn "
         "AND m.sgpa IS NOT NULL), s.cgpa)"
     )
+    # Filters and rankings must judge the number the staff member sees in the
+    # result grid; comparing the unrounded average made "cgpa at least 9.47"
+    # reject the student whose CGPA row reads 9.47.
+    cgpa_compared = f"ROUND({cgpa_expression}, 2)"
     is_count = bool(re.search(r"\b(?:count|how\s+many|number\s+of)\b", query))
     lateral_requested = bool(
         re.search(r"\blateral(?:[\s-]+entry)?\b|\bdirect\s+(?:second|2nd)\s+year\b", query)
@@ -1655,6 +2191,9 @@ def build_deterministic_student_query(nq: str) -> dict | None:
     )
 
     if lateral_requested:
+        # Stored rows say "Lateral", the USN-derived fallback says "LATERAL ENTRY";
+        # comparing to one literal answered "show lateral entry students" with zero
+        # rows because no spelling matched both.
         lateral_expression = (
             "COALESCE(NULLIF(UPPER(TRIM(s.student_type)), ''), "
             "CASE WHEN UPPER(s.usn) REGEXP "
@@ -1666,11 +2205,12 @@ def build_deterministic_student_query(nq: str) -> dict | None:
         )
         add_filter_condition(
             "student_type",
-            "EQUALS",
+            "IN",
             "LATERAL ENTRY",
-            f"{lateral_expression} = %s",
-            ["LATERAL ENTRY"],
+            f"{lateral_expression} IN (%s, %s)",
+            ["LATERAL", "LATERAL ENTRY"],
         )
+        selected_fields.append("s.student_type")
 
     # ── Plural name listing: "students named X" / "students called X" ──────────
     # The LLM resolves a lone name to exact equality, so "students named Rahul"
@@ -1691,6 +2231,17 @@ def build_deterministic_student_query(nq: str) -> dict | None:
                 "name", "CONTAINS", _nm,
                 "LOWER(TRIM(s.name)) LIKE %s", [f"%{_nm.lower()}%"],
             )
+
+    # ── Backlogs / arrears as one filter among many ───────────────────────────
+    _bk = _backlog_student_filter_sql(query)
+    if _bk:
+        _bk_sql, _bk_params = _bk
+        add_filter_condition(
+            "backlogs",
+            "NOT_EXISTS" if _bk_sql.startswith("s.usn NOT IN") else "EXISTS",
+            _bk_params[0] if _bk_params else "any backlog",
+            _bk_sql, _bk_params,
+        )
 
     # ── Universal field registry (covers ALL student fields + dynamically added ones) ──
     # Order matters: longer/more-specific patterns first to avoid partial matches.
@@ -1784,8 +2335,20 @@ def build_deterministic_student_query(nq: str) -> dict | None:
         r"\b(?:which|who|show|list|students?|whose)\b.*\b(?:have|has|with|available|present|entered|recorded|provided)\b",
         query,
     ):
-        column, _ = requested_data_field
-        skip_present = False
+        column, field_pattern = requested_data_field
+        # "students of Have district" is a mistyped place value, but "Have" also
+        # spells the verb the presence test below looks for, and answering it as
+        # "students who have a district" silently returns 58 of 65 students. A
+        # word sitting between a place preposition and the column keyword is a
+        # value; the fuzzy value resolver handles it. "students who have district"
+        # (no preposition) keeps its presence meaning.
+        if re.search(
+            rf"\b(?:of|from|in|at)\s+[a-z][a-z'\-]*\s+(?:{field_pattern})\b",
+            query, re.I,
+        ):
+            skip_present = True
+        else:
+            skip_present = False
         if column == "blood_group" and re.search(
             r"(?<![A-Z0-9])(AB|A|B|O)\s*(\+|-|plus|positive|pos|negative|neg|-)?(?![A-Z])",
             query,
@@ -1920,12 +2483,39 @@ def build_deterministic_student_query(nq: str) -> dict | None:
             )
             selected_fields.extend(("s.area_type", "s.village", "s.region"))
 
-    if re.search(r"\b(?:female|females|girls?|women|woman|ladies)\b", query):
-        add_filter_condition("gender", "EQUALS", "FEMALE", "UPPER(COALESCE(s.gender, '')) = %s", ["FEMALE"])
+    # Both genders named side by side ("male and female students") is the union.
+    # Named as two separate conditions ("male students … who are female") the
+    # request cannot be satisfied: silently keeping only the last gender read
+    # every such question as its opposite.
+    _GENDER_WORDS = (
+        ("FEMALE", r"female|females|girls?|women|woman|ladies"),
+        ("MALE", r"male|males|boys?|men"),
+    )
+    gender_hits = sorted(
+        [(match.start(), kind)
+         for kind, pattern in _GENDER_WORDS
+         for match in re.finditer(rf"\b(?:{pattern})\b", query)]
+    )
+    if gender_hits:
         selected_fields.append("s.gender")
-    elif re.search(r"\b(?:male|males|boys?|men)\b", query):
-        add_filter_condition("gender", "EQUALS", "MALE", "UPPER(COALESCE(s.gender, '')) = %s", ["MALE"])
-        selected_fields.append("s.gender")
+        kinds = {kind for _pos, kind in gender_hits}
+        if len(kinds) > 1:
+            paired = any(kind != gender_hits[0][1] and pos - gender_hits[0][0] <= 16
+                         for pos, kind in gender_hits[1:])
+            if not paired:
+                raise HTTPException(
+                    400,
+                    "This request filters on two different genders at once, which no "
+                    "student can satisfy. Please ask for one gender at a time.",
+                )
+            add_filter_condition(
+                "gender", "IN", ["FEMALE", "MALE"],
+                "UPPER(COALESCE(s.gender, '')) IN (%s, %s)", ["FEMALE", "MALE"],
+            )
+        else:
+            kind = gender_hits[0][1]
+            add_filter_condition("gender", "EQUALS", kind,
+                                 "UPPER(COALESCE(s.gender, '')) = %s", [kind])
 
     # ── Religion / Caste / Category — value-aware so everyday staff phrasing
     # ("muslim students", "vokkaliga caste", "hindu relegion", "2A category")
@@ -1975,11 +2565,17 @@ def build_deterministic_student_query(nq: str) -> dict | None:
     )
     cast_value = ""
     if cast_m:
-        cast_value = next((g for g in cast_m.groups() if g), "").strip()
-        cast_value = re.sub(r"^(?:list|show|display|all|the|a|an|get|find|give|students?)\s+", "", cast_value)
-        cast_value = re.sub(
-            r"\b(?:students?|student|in|the|a|an|of|and|with|who|whose|religion|relegion|category)\b.*$",
-            "", cast_value).strip()
+        raw_cast = next((g for g in cast_m.groups() if g), "").strip()
+        # The capture is anchored at the earliest word of the sentence, so it
+        # usually still holds the request itself ("list students of general").
+        # Removing only a leading command word left "students of general" and the
+        # trailing cleanup then emptied it, so the caste filter silently vanished.
+        _cast_words = [w for w in re.split(r"\s+", raw_cast) if w.casefold() not in {
+            "list", "show", "display", "get", "find", "give", "print", "tell", "me",
+            "all", "the", "a", "an", "of", "for", "to", "in", "is", "are", "and",
+            "or", "with", "who", "whose", "which", "students", "student", "having",
+            "has", "have", "category", "community", "backlog", "fees", "fee"}]
+        cast_value = " ".join(_cast_words).strip()
     _caste_generic = {"", "is", "the", "a", "an", "of", "what", "which", "list", "show", "all", "backlog", "quota"}
     if cast_value and cast_value not in _caste_generic:
         add_filter_condition(
@@ -2024,6 +2620,20 @@ def build_deterministic_student_query(nq: str) -> dict | None:
     if status_value:
         add_filter_condition("status", "EQUALS", status_value, "UPPER(COALESCE(s.status, '')) = %s", [status_value])
         selected_fields.append("s.status")
+
+    # ── Fee status next to other filters ──────────────────────────────────────
+    # A fee-only question is answered by the fee query above. As soon as the
+    # question also names a district, gender, caste or score, the fee class
+    # becomes one more condition here, so no part of the request is dropped.
+    fee_target = _fee_status_target(query) if _FEE_TOPIC_RE.search(query) else None
+    if fee_target:
+        fee_usns = _fee_status_usns(fee_target)
+        if fee_usns:
+            _fee_ph = ", ".join(["%s"] * len(fee_usns))
+            add_filter_condition("fee_status", "IN", fee_target,
+                                 f"s.usn IN ({_fee_ph})", fee_usns)
+        else:
+            add_filter_condition("fee_status", "EQUALS", fee_target, "1 = 0")
 
     # ── DOB / birth year / month ──────────────────────────────────────────────
     _MONTHS = ("january", "february", "march", "april", "may", "june", "july",
@@ -2076,22 +2686,22 @@ def build_deterministic_student_query(nq: str) -> dict | None:
         selected_fields.append("s.year_of_joining")
         selected_fields.append("s.admission_year")
 
-    branch_aliases = {
-        "CS": ("CS", "CSE", "COMPUTER SCIENCE"),
-        "CSE": ("CS", "CSE", "COMPUTER SCIENCE"),
-        "COMPUTER SCIENCE": ("CS", "CSE", "COMPUTER SCIENCE"),
-        "IS": ("IS", "ISE", "INFORMATION SCIENCE"),
-        "ISE": ("IS", "ISE", "INFORMATION SCIENCE"),
-        "INFORMATION SCIENCE": ("IS", "ISE", "INFORMATION SCIENCE"),
-        "EC": ("EC", "ECE", "ELECTRONICS"),
-        "ECE": ("EC", "ECE", "ELECTRONICS"),
-        "ELECTRONICS": ("EC", "ECE", "ELECTRONICS"),
-        "ME": ("ME", "MECH", "MECHANICAL"),
-        "MECH": ("ME", "MECH", "MECHANICAL"),
-        "MECHANICAL": ("ME", "MECH", "MECHANICAL"),
-        "CV": ("CV", "CIVIL"),
-        "CIVIL": ("CV", "CIVIL"),
-    }
+    # Every branch spelling maps to its sibling spellings. Derived from the
+    # single source of truth in rag_sql_generator; the hand-written copy of this
+    # table used to omit "CIV", so "student in CIV" leaked a bogus
+    # address LIKE '%civ%' filter alongside the correct branch filter and
+    # answered with zero students.
+    branch_aliases: dict[str, tuple[str, ...]] = {}
+    for _alias_group in _BRANCH_NORMALIZATION.values():
+        for _alias in _alias_group:
+            branch_aliases[_alias] = _alias_group
+    # Words that make up a department name ("electronics and communication
+    # engineering"). A place filter may never be built out of them: the split on
+    # "and" left "communication engineering", which matched no address and
+    # answered the whole EC department with zero students.
+    _branch_vocab = {word for _group in _BRANCH_NORMALIZATION.values()
+                     for _alias in _group
+                     for word in re.findall(r"[a-z]+", str(_alias).lower())}
     branches = []
 
     # 1. Multi-word and explicit branch names (case-insensitive)
@@ -2222,12 +2832,7 @@ def build_deterministic_student_query(nq: str) -> dict | None:
     age_expression = "TIMESTAMPDIFF(YEAR, s.dob, CURDATE())"
     age_range = re.search(r"\bbetween\s+(\d{1,3})\s+(?:and|to|-)\s+(\d{1,3})\b", query)
     age_or = re.search(r"\b(\d{1,3})\s+or\s+(\d{1,3})\b", query) if age_context else None
-    age_operator = re.search(
-        r"\b(?:age|aged)\s+(above|over|more\s+than|older\s+than|below|under|"
-        r"less\s+than|younger\s+than|at\s+least|or\s+above|or\s+older|at\s+most)\s+(\d{1,3})\b|"
-        r"\b(older|younger)\s+than\s+(\d{1,3})\b",
-        query,
-    ) if age_context else None
+    age_operator = _comparison_match(query, r"age(?:d|s)?|years?\s+old") if age_context else None
     age_value = re.search(r"\b(?:age|aged)\s*(?:is|=|of)?\s*(\d{1,3})\b", query) if age_context else None
     if not age_value and age_context:
         age_value = re.search(r"\b(\d{1,3})\s*(?:-?years?\s+old|-year-old)\b", query)
@@ -2243,16 +2848,23 @@ def build_deterministic_student_query(nq: str) -> dict | None:
         add_filter_condition("age", "IN", ages, f"{age_expression} IN ({', '.join(['%s'] * len(ages))})", ages)
         selected_fields.append(f"{age_expression} AS age")
     elif age_operator:
-        operator_word = age_operator.group(1) or age_operator.group(3)
-        age_text = age_operator.group(2) or age_operator.group(4)
-        operator_word = operator_word.casefold()
-        operator = ">=" if operator_word in {"at least", "or above", "or older"} else (
-            "<=" if operator_word == "at most" else (
-                "<" if operator_word in {"below", "under", "less than", "younger than", "younger"} else ">"
-            )
-        )
-        age_operator_name = {">": "GREATER_THAN", ">=": "GREATER_EQUAL", "<": "LESS_THAN", "<=": "LESS_EQUAL"}[operator]
-        add_filter_condition("age", age_operator_name, int(age_text), f"{age_expression} {operator} %s", [int(age_text)])
+        operator, raw, match = age_operator
+        age = int(raw)
+        # "aged 18 or older" carries no operator before the number; the linking
+        # words after it decide whether the bound is inclusive.
+        following = query[match.end():match.end() + 24]
+        if operator == "=":
+            if re.search(r"\b(?:or|and)\s+(?:above|older|over|more|greater|less)\b", following):
+                operator = ">="
+            elif re.search(r"\b(?:or|and)\s+(?:below|younger|under|less|fewer)\b", following):
+                operator = "<="
+        if operator == "NOT_EQUALS":
+            operator = "!="
+        if operator not in (">", ">=", "<", "<=", "=", "!="):
+            operator = "="
+        age_name = {">": "GREATER_THAN", ">=": "GREATER_EQUAL", "<": "LESS_THAN",
+                    "<=": "LESS_EQUAL", "=": "EQUALS", "!=": "NOT_EQUALS"}[operator]
+        add_filter_condition("age", age_name, age, f"{age_expression} {operator} %s", [age])
         selected_fields.append(f"{age_expression} AS age")
     elif age_value:
         age = int(age_value.group(1))
@@ -2278,7 +2890,7 @@ def build_deterministic_student_query(nq: str) -> dict | None:
         )
     )
     if cgpa_missing:
-        add_filter_condition("cgpa", "MISSING", None, f"{cgpa_expression} IS NULL")
+        add_filter_condition("cgpa", "MISSING", None, f"{cgpa_compared} IS NULL")
         selected_fields.append(f"ROUND({cgpa_expression}, 2) AS cgpa")
     elif gpa_context:
         # Decide which GPA metric to filter on
@@ -2299,109 +2911,150 @@ def build_deterministic_student_query(nq: str) -> dict | None:
                 add_filter_condition("sgpa", "BETWEEN", [low, high], sgpa_sql, [target_semester, target_semester, low, high])
                 selected_fields.append(f"ROUND({sgpa_per_sem_expression % (target_semester,)}, 2) AS sgpa")
             else:
-                add_filter_condition("cgpa", "BETWEEN", [low, high], f"{cgpa_expression} BETWEEN %s AND %s", [low, high])
+                add_filter_condition("cgpa", "BETWEEN", [low, high], f"{cgpa_compared} BETWEEN %s AND %s", [low, high])
                 selected_fields.append(f"ROUND({cgpa_expression}, 2) AS cgpa")
         else:
             # Reusable comparison layer. A numeric threshold may be phrased either
             # field-first ("cgpa above 8", "cgpa > 8") or value-first
-            # ("more than 8 cgpa", "exceeds 9 sgpa"). Both orders share one operator
-            # table so no connecting word ("more", "than", "over") is ever mistaken
-            # for a database field.
-            _OP_SYNONYMS = {
-                "above": ">", "over": ">", "greater than": ">", "greater": ">",
-                "more than": ">", "more": ">", "mele": ">", "mela": ">",
-                "exceeds": ">", "exceed": ">", ">": ">",
-                "below": "<", "under": "<", "less than": "<", "less": "<", "<": "<",
-                "at least": ">=", "minimum": ">=", "not below": ">=",
-                "not less than": ">=", ">=": ">=",
-                "at most": "<=", "maximum": "<=", "not above": "<=",
-                "not more than": "<=", "<=": "<=",
-                "=": "=", "==": "=", "equals": "=", "equal": "=", "equal to": "=",
-                "exactly": "=", "is": "=",
-            }
-            _FIELD_FIRST = (
-                r"\b(?:cgpa|sgpa|gpa)\b\s*(?:is\s+|of\s+|as\s+|was\s+|being\s+)?"
-                r"(?:(not\s+)?(above|over|greater than|greater|more than|more|"
-                r"exceeds|exceed|"
-                r"below|under|less than|less|at least|minimum|at most|maximum|"
-                r"not below|not above|not less than|not more than|equal to|equals|equal|exactly|"
-                r">=|<=|==|>|<|=))?\s*(\d+(?:\.\d+)?)"
-            )
-            _VALUE_FIRST = (
-                r"(?:(not\s+)?(above|over|greater than|greater|more than|more|"
-                r"exceeds|exceed|"
-                r"below|under|less than|less|at least|minimum|at most|maximum|"
-                r"not below|not above|not less than|not more than|equal to|equals|equal|exactly|"
-                r">=|<=|==|>|<|=))\s*(\d+(?:\.\d+)?)\s*(?:of\s+)?(?:cgpa|sgpa|gpa)\b"
-            )
-            gpa_match = (
-                re.search(_FIELD_FIRST, query)
-                or re.search(_VALUE_FIRST, query)
-            )
-            # A GPA threshold lives on a 0-10 scale. This prevents a batch/admission
-            # year ("sgpa of 2023", "cgpa of 2024 batch") being misread as a score.
-            if gpa_match and not (0 <= float(gpa_match.group(3)) <= 10):
-                gpa_match = None
-            if gpa_match:
-                negation, operator_word, value = gpa_match.groups()
-                operator_word = (operator_word or "=").casefold().strip()
-                operator = _OP_SYNONYMS.get(operator_word, "=")
-                if negation:
-                    operator = {"<": ">=", ">": "<="}.get(operator, operator)
+            # ("more than 8 cgpa", "exceeds 9 sgpa"), with or without a linking
+            # verb ("cgpa is at least 7"). Both orders share the module's one
+            # operator table so no connecting word is ever mistaken for a field.
+            comparison = _comparison_match(query, r"cgpa|sgpa|gpa")
+            if comparison and not (0 <= comparison[1] <= 10):
+                comparison = None
+            if comparison:
+                operator, raw, _match = comparison
+                value = float(raw)
+                if operator == "NOT_EQUALS":
+                    raise HTTPException(
+                        400,
+                        "CGPA cannot be filtered as 'not equal to' a single score. "
+                        "Please ask for above or below a value.",
+                    )
+                operator_name = {">": "GREATER_THAN", ">=": "GREATER_EQUAL",
+                                 "<": "LESS_THAN", "<=": "LESS_EQUAL",
+                                 "=": "EQUALS"}[operator]
                 if use_per_sem_sgpa and target_semester is not None:
                     sgpa_sql = (
                         f"(EXISTS (SELECT 1 FROM marks m WHERE m.usn=s.usn AND m.semester=%s AND m.sgpa IS NOT NULL) "
                         f"AND {sgpa_per_sem_expression} {operator} %s)"
                     )
-                    operator_name = {">": "GREATER_THAN", ">=": "GREATER_EQUAL", "<": "LESS_THAN", "<=": "LESS_EQUAL", "=": "EQUALS"}[operator]
-                    add_filter_condition("sgpa", operator_name, float(value), sgpa_sql, [target_semester, target_semester, float(value)])
+                    add_filter_condition("sgpa", operator_name, value, sgpa_sql,
+                                         [target_semester, target_semester, value])
                     selected_fields.append(f"ROUND({sgpa_per_sem_expression % (target_semester,)}, 2) AS sgpa")
                 else:
-                    operator_name = {">": "GREATER_THAN", ">=": "GREATER_EQUAL", "<": "LESS_THAN", "<=": "LESS_EQUAL", "=": "EQUALS"}[operator]
-                    add_filter_condition("cgpa", operator_name, float(value), f"{cgpa_expression} {operator} %s", [float(value)])
+                    add_filter_condition("cgpa", operator_name, value,
+                                         f"{cgpa_compared} {operator} %s", [value])
                     selected_fields.append(f"ROUND({cgpa_expression}, 2) AS cgpa")
+            elif re.search(rf"\b(?:cgpa|sgpa|gpa)\s*{_COPULA}(?:not\s+)?{_OP_WORD}\s*\d", query):
+                # An operator word and a score are both present but the parse above
+                # found no usable threshold. Answering with unfiltered rows would be
+                # worse than asking, so say which part was not understood.
+                raise HTTPException(400, "could not map: the grade threshold in this question")
+
+    # ── Place filters ─────────────────────────────────────────────────────────
+    # Staff name a place with or without a preposition ("from Haveri",
+    # "Hassan taluk", "Belur village"), list several at once ("Haveri or Dharwad
+    # district"), and negate them ("not from Haveri"). Every form has to compile
+    # to the matching SQL: the list tail and the word "not" used to be discarded,
+    # which answered a subset request as if it were the whole answer and a
+    # "not from" request with exactly the rows the staff member excluded.
+    _DISTRICT_WORDS = r"(?:district|distict|distrct|distric|ditrict|zilla|jilla)"
+    _PLACE_NOUNS = (
+        ("district", rf"(?:{_DISTRICT_WORDS})s?"),
+        ("taluk", r"(?:taluk|taluka|tehsil|tahsil)s?"),
+        ("village", r"(?:village|habli)s?"),
+        ("state", r"(?:state)s?"),
+    )
+    _skip_locations = {
+        "rural", "urban", "the", "a", "an", "rural area", "urban area",
+        "rural areas", "urban areas", "rural region", "urban region",
+    }
+    # Repeatedly strip trailing generic geographic noise words so phrases like
+    # "rural areas" / "urban region" collapse to the bare classifier and get
+    # skipped instead of becoming a failing LIKE '%rural areas%' filter.
+    _noise_suffix = re.compile(
+        rf"\s+(?:{_DISTRICT_WORDS}|taluk|taluka|tehsil|tahsil|village|habli|state"
+        rf"|city|town|area|areas|region|regions|side|sides|part|parts"
+        rf"|locality|localities|place|places)(?:s|es)?$"
+    )
+    # A negation counts only when it is the words typed directly before the
+    # place, so "not having backlogs from Haveri" stays a positive Haveri filter.
+    _NEGATED_PREPOSITION = re.compile(
+        r"^(?:not|except|excluding|exclude|other\s+than|leaving\s+out|leave\s+out)\b",
+        re.I)
+    _NEGATED_BEFORE_NOUN = re.compile(
+        r"\b(?:not|except|excluding|exclude|other\s+than|leaving\s+out|leave\s+out)\s*$",
+        re.I)
+
+    def _clean_place_value(raw: str) -> str:
+        value = re.sub(r"\s+", " ", (raw or "").strip()).strip(" ,.'-")
+        while True:
+            stripped = _noise_suffix.sub("", value).strip()
+            if stripped == value:
+                return stripped
+            value = stripped
+
+    def _add_place_condition(column: str, values: list, negated: bool) -> None:
+        """Compile one or several place values against one column (or the
+        address blob when no place noun was typed)."""
+        _has_branch_filter = any(condition["field"] == "branch"
+                                 for condition in filter_conditions)
+
+        def _is_branch_text(value: str) -> bool:
+            words = re.findall(r"[a-z]+", value.lower())
+            return bool(words) and set(words) <= _branch_vocab
+
+        values = [v for v in (str(value).strip().lower() for value in values)
+                  if v and v not in _skip_locations
+                  and v.upper() not in branch_aliases
+                  and not (_has_branch_filter and _is_branch_text(v))]
+        if not values:
+            return
+        op = "NOT LIKE" if negated else "LIKE"
+        joiner = " AND " if negated else " OR "
+        if column == "location":
+            haystack = ("LOWER(CONCAT_WS(' ', COALESCE(s.address,''), COALESCE(s.village,''), "
+                        "COALESCE(s.taluk,''), COALESCE(s.district,'')))")
+            fields = ("s.address", "s.village", "s.taluk", "s.district")
+        else:
+            col = _safe_column_name(column)
+            haystack = f"LOWER(TRIM(COALESCE(s.{col}, '')))"
+            fields = (f"s.{col}",)
+        parts = [f"{haystack} {op} %s" for _ in values]
+        sql = "(" + joiner.join(parts) + ")" if len(parts) > 1 else parts[0]
+        add_filter_condition(column, "NOT_CONTAINS" if negated else "CONTAINS",
+                             values[0] if len(values) == 1 else values,
+                             sql, [f"%{value}%" for value in values])
+        if len(values) > 1:
+            filter_conditions[-1]["any_of"] = values
+        for field in fields:
+            if field not in selected_fields:
+                selected_fields.append(field)
 
     location_match = re.search(
-        r"\b(?:from|in|at|near)\s+(?!(?:least|most|best|first|second|third|fourth|fifth|"
+        r"\b((?:(?:not|except\s+those|except|excluding|exclude|other\s+than|"
+        r"leaving\s+out|leave\s+out)\s+)?(?:from|in|at|near))\s+"
+        r"(?!(?:least|most|best|first|second|third|fourth|fifth|"
         r"sixth|seventh|eighth|ninth|tenth|last|worst|highest|lowest|"
         r"maximum|minimum|equal|exactly|greater|less|above|below|over|under)\b)"
-        r"([a-z][a-z .'-]*?)"
-        r"(?=\s+(?:with|who|and|or|aged?|age|branch|semester|sem|cgpa|blood|father|"
-        r"mother|students?|student|phone|gender|rural|urban|having|without|missing|no|whose)\b|[?.!,;]|$)",
+        r"([a-z][a-z .,'-]*?)"
+        r"(?=\s+(?:with|who|whose|which|aged?|age|branch|department|semester|sem|cgpa|sgpa|gpa|"
+        r"blood|father|mother|students?|student|phone|mobile|email|gender|male|female|"
+        r"boys?|girls?|rural|urban|having|has|have|without|within|missing|no|not|but|"
+        r"living|lives|live|residing|staying|studying|backlog|backlogs|arrear|arrears|"
+        r"fee|fees|paid|unpaid|pending|lateral|regular|active|dropout|graduat\w*)\b|[?.;!]|$)",
         query,
     )
     if location_match:
-        location = location_match.group(1).strip()
-        # "district" may be misspelled ("distict", "distrct", "zilla"); detect the
-        # intent, then strip it so the remaining proper noun ("hassan") is the value.
-        _district_word = re.compile(
-            r"\b(?:district|distict|distrct|distric|ditrict|zilla|jilla)\b", re.I
-        )
-        district_requested = bool(_district_word.search(location))
-        # Repeatedly strip trailing generic geographic noise words so phrases like
-        # "rural areas" / "urban region" collapse to the bare classifier and get
-        # skipped below instead of becoming a failing LIKE '%rural areas%' filter.
-        _noise_suffix = re.compile(
-            r"\s+(?:district|distict|distrct|distric|zilla|jilla|taluk|taluka|village|city|town|area|areas|region|"
-            r"regions|side|sides|part|parts|locality|localities|place|places)$"
-        )
-        while True:
-            stripped = _noise_suffix.sub("", location).strip()
-            if stripped == location:
-                break
-            location = stripped
-        _skip_locations = {
-            "rural", "urban", "the", "a", "an", "rural area", "urban area",
-            "rural areas", "urban areas", "rural region", "urban region",
-        }
+        raw_clause = (location_match.group(2) or "").strip()
+        negated = bool(_NEGATED_PREPOSITION.match(location_match.group(1)))
+        clause = _clean_place_value(raw_clause)
         # Meta-questions like "total number of students in the database/system"
         # would otherwise become LIKE '%the database%' and match zero real
-        # addresses. Strip a leading article; if the remainder is a generic
-        # non-geographic noun, it is not a location and must not filter.
-        _loc_core = re.sub(r"^(?:the|a|an)\s+", "", location.lower()).strip()
-        # A "in semester three" / "in 3rd sem" phrase is an academic filter, not a
-        # place — never turn it into LIKE '%semester three%' (which matches 0 and
-        # would also mask the real current_sem filter detected above).
+        # addresses. A "in semester three" phrase is an academic filter, not a
+        # place either — it must not mask the real current_sem filter.
+        _loc_core = re.sub(r"^(?:the|a|an)\s+", "", clause.lower()).strip()
         _is_sem_phrase = bool(re.match(r"(?:sem|semester|semesters)\b", _loc_core)) or bool(
             re.match(r"[1-8](?:st|nd|rd|th)?[-\s]*(?:sem|semester)\b", _loc_core)
         ) or bool(re.match(
@@ -2416,48 +3069,123 @@ def build_deterministic_student_query(nq: str) -> dict | None:
             # the word is the sort key, so it must never filter the rows away.
             "cgpa", "sgpa", "gpa", "marks", "percentage", "percent",
         }:
-            location = ""
-        if district_requested and location and location.lower() not in _skip_locations:
-            # Explicit "<Name> district": resolve against the district column.
-            add_filter_condition(
-                "district", "CONTAINS", location,
-                "LOWER(COALESCE(s.district, '')) LIKE %s", [f"%{location.lower()}%"],
-            )
-            if "s.district" not in selected_fields:
-                selected_fields.append("s.district")
-        elif location and location.upper() not in branch_aliases and location.lower() not in _skip_locations:
-            location_sql = (
-                "LOWER(CONCAT_WS(' ', COALESCE(s.address,''), COALESCE(s.village,''), "
-                "COALESCE(s.taluk,''), COALESCE(s.district,''))) LIKE %s"
-            )
-            add_filter_condition("location", "CONTAINS", location, location_sql, [f"%{location}%"])
-            selected_fields.extend(("s.address", "s.village", "s.taluk", "s.district"))
+            clause = ""
+        if clause:
+            # The place noun is detected on the raw clause because the value
+            # cleanup removes it: "from Haveri district" filters the district
+            # column, "from Hassan taluk" the taluk column.
+            column = "location"
+            for candidate, noun_pattern in _PLACE_NOUNS:
+                if re.search(rf"(?:{noun_pattern})\b", raw_clause, re.I):
+                    column = candidate
+                    break
+            # "Haveri or Dharwad district" / "A, B and C districts" — every value
+            # in the list is a filter, never only the first one.
+            values = [_clean_place_value(part) for part in re.split(
+                r"\s*,\s*|\s+or\s+|\s+and\s+", raw_clause)]
+            _add_place_condition(column, [v for v in values if v], negated)
 
-    # A district can be named without a preposition ("... hassan distict",
-    # "hassan jilla"). When no location filter was added above, resolve an
-    # explicit district value against the district column so the condition is
-    # neither dropped nor routed to an unmapped-field error. Misspellings of
-    # "district" are accepted; the neighbouring proper noun is the value.
-    _already_has_location = any(
-        condition["field"] in {"district", "location"} for condition in filter_conditions
+    # A place can be named without a preposition ("students hassan distict",
+    # "list students of Hassan taluk"). When no location filter was added above,
+    # resolve "<value> <place noun>" against that column so the condition is
+    # neither dropped nor routed to an unmapped-field error. The word must be a
+    # real value of that column (or a near-miss of one): otherwise the noun is a
+    # requested column name ("show village and district") and must not filter.
+    if not any(condition["field"] in {"district", "taluk", "village", "state", "location"}
+               for condition in filter_conditions):
+        for candidate, noun_pattern in _PLACE_NOUNS:
+            noun_match = re.search(
+                rf"\b(?!(?:of|from|in|at|the|a|an|and|or|to|for|with|without|is|are|near|"
+                rf"show|list|display|give|get|whose|which|who|students?|their|his|her)\b)"
+                rf"([a-z][a-z']{{2,28}})\s+(?:{noun_pattern})\b"
+                rf"|\b(?:{noun_pattern})\s+([a-z][a-z']{{2,28}})\b",
+                query,
+            )
+            if not noun_match:
+                continue
+            value = (noun_match.group(1) or noun_match.group(2) or "").strip().lower()
+            if (not value or value in _skip_locations
+                    or value.upper() in branch_aliases
+                    or re.fullmatch(rf"(?:{_DISTRICT_WORDS})s?", value)):
+                continue
+            if _best_value_match(candidate, value)[1] < 0.8:
+                continue
+            _add_place_condition(
+                candidate, [value],
+                bool(_NEGATED_BEFORE_NOUN.search(
+                    query[max(0, noun_match.start() - 30):noun_match.start()])),
+            )
+            break
+
+    # ── "<field> contains <value>": substring search on a text column ────────
+    # The word "contains" used to carry no meaning here: "whose name contains Ra"
+    # was read either as "name is available" (the whole batch) or as a lookup for
+    # one person literally named "contains Ra" (no rows at all). Staff type part
+    # of a name, village or address, so this has to search inside the column.
+    _CONTAINS_COLUMNS = (
+        (r"\bfather(?:['’]s)?\s+names?\b", ("father_name",)),
+        (r"\bmother(?:['’]s)?\s+names?\b", ("mother_name",)),
+        (r"\b(?:permanent|home)\s+address(?:es)?\b", ("permanent_address",)),
+        (r"\b(?:current|local|present)\s+address(?:es)?\b", ("current_address",)),
+        (r"\baddress(?:es)?\b", ("address", "permanent_address", "current_address",
+                                 "village", "taluk")),
+        (r"\bvillages?\b|\bnative\s+place\b", ("village",)),
+        (r"\btaluks?\b|\btehsils?\b|\bmandals?\b", ("taluk",)),
+        (r"\bdistricts?\b", ("district",)),
+        (r"\bstates?\b", ("state",)),
+        (r"\breligions?\b|\brelegions?\b", ("religion",)),
+        (r"\bcastes?\b", ("caste",)),
+        (r"\bsub[\s-]*castes?\b", ("sub_caste",)),
+        (r"\bblood\s+(?:group|type)s?\b", ("blood_group",)),
+        (r"\b(?:phone|mobile)(?:\s+numbers?)?\b", ("phone", "emergency_contact_number")),
+        (r"\b(?:emails?|mails?)\b", ("email",)),
+        (r"\badmission\s+year\b|\byear\s+of\s+joining\b", ("year_of_joining",)),
+        (r"\bpin\s*codes?\b", ("pin_code",)),
+        (r"\bpost\s+offices?\b", ("post_office",)),
+        (r"\bnames?\b", ("name",)),
     )
-    if not _already_has_location:
-        _DISTRICT_KEYWORDS = ("district", "distict", "distrct", "distric", "ditrict", "zilla", "jilla")
-        _district_token = "|".join(_DISTRICT_KEYWORDS)
-        _non_place = {"rural", "urban", "the", "a", "an", "students", "student", "sem", "semester", "top", "last"}
-        district_name_match = re.search(
-            rf"\b([a-z][a-z']{{2,29}})\s+(?:{_district_token})\b|\b(?:{_district_token})\s+([a-z][a-z']{{2,29}})\b",
-            query,
-        )
-        if district_name_match:
-            candidate = (district_name_match.group(1) or district_name_match.group(2)).lower()
-            if candidate not in _non_place and candidate not in _DISTRICT_KEYWORDS:
-                add_filter_condition(
-                    "district", "CONTAINS", candidate,
-                    "LOWER(COALESCE(s.district, '')) LIKE %s", [f"%{candidate}%"],
-                )
-                if "s.district" not in selected_fields:
-                    selected_fields.append("s.district")
+    _CONTAINS_STOP = (
+        r"(?=\s+(?:students?|who|whose|which|that|from|in|with|having|and|or|but|"
+        r"branch|department|semester|sem|cgpa|sgpa|gpa|age|aged|years?\s+old|gender|"
+        r"blood|religion|caste|category|district|taluk|village|state|phone|mobile|email|"
+        r"male|female|rural|urban|lateral|active|graduat\w*|show|list|count)\b|[?.!,;]|$)"
+    )
+    for _op_match in re.finditer(r"\b(?:contains?|containing|includes?|including)\b",
+                                 query, re.I):
+        _before = query[:_op_match.start()].strip()
+        _field_text = " ".join(re.findall(r"[A-Za-z][A-Za-z'’]*", _before)[-3:]).casefold()
+        _negated = bool(re.search(
+            r"\b(?:not|without|except|excluding|doesn'?t|don'?t)\s*$", _before, re.I))
+        if not _field_text:
+            continue
+        _value_match = re.match(
+            r"\s*(?:of\s+|the\s+|is\s+|as\s+)?"
+            r"([A-Za-z0-9][A-Za-z0-9 .'\-]{0,40}?)" + _CONTAINS_STOP,
+            query[_op_match.end():], re.I)
+        if not _value_match:
+            continue
+        _needle = _value_match.group(1).strip(" .'-")
+        if not _needle or _needle.casefold() in {
+                "not", "no", "none", "missing", "null", "empty", "blank", "available",
+                "present", "entered", "recorded", "his", "her", "their"}:
+            continue
+        _columns = next((cols for pat, cols in _CONTAINS_COLUMNS
+                         if re.search(pat, _field_text)), None)
+        if not _columns or any(condition["field"] in _columns
+                               for condition in filter_conditions):
+            continue
+        _parts = [f"LOWER(TRIM(COALESCE(s.`{_col}`, ''))) "
+                  f"{'NOT LIKE' if _negated else 'LIKE'} %s" for _col in _columns]
+        _joiner = " AND " if _negated else " OR "
+        _contains_sql = ("(" + _joiner.join(_parts) + ")") if len(_parts) > 1 else _parts[0]
+        add_filter_condition(
+            _columns[0], "NOT_CONTAINS" if _negated else "CONTAINS", _needle,
+            _contains_sql, [f"%{_needle.lower()}%"] * len(_columns))
+        filter_conditions[-1]["row_fields"] = list(_columns)
+        for _col in _columns:
+            item = f"s.`{_col}`"
+            if item not in selected_fields:
+                selected_fields.append(item)
 
     for column, pattern in requested_data_fields:
         if any(condition["field"] == column for condition in filter_conditions):
@@ -2552,6 +3280,49 @@ def build_deterministic_student_query(nq: str) -> dict | None:
             add_filter_condition(db_col, "EQUALS", raw_value, sql_expr, [raw_value])
         selected_fields.append(f"s.`{db_col}`")
 
+    # ── "<value> students": the leading word names a column, not a person ─────
+    # "show details of Vokkaliga students" produced no condition at all, so the
+    # LLM searched student *names* for "vokkaliga" and answered with zero rows.
+    # Only runs when nothing else was captured and the word is the exact value of
+    # exactly one column, so genuine name lookups keep their own path.
+    if not filter_conditions:
+        _value_led = re.match(
+            r"^\s*(?:(?:show|list|display|give|fetch|print|get|tell|me|all|the|only|"
+            r"complete|full|details|detail|information|info|record|records|profile|"
+            r"data|of|for|about)\s+)*"
+            r"(?P<value>[a-z][a-z' .-]{2,40}?)\s+students\s*[?.!]*\s*$",
+            query, re.I,
+        )
+        if _value_led:
+            _led_text = re.sub(r"\s+", " ", _value_led.group("value")).strip(" .'-")
+            _led_hits: dict[str, str] = {}
+            for _led_col in sorted(_FUZZY_VALUE_COLUMNS):
+                if _led_col == "branch":
+                    continue  # branch has its own canonicalisation path
+                for _known in _column_values(_led_col):
+                    if _known.casefold() == _led_text.casefold():
+                        _led_hits.setdefault(_led_col, _known)
+                        break
+            if _led_hits:
+                # A place name usually lives in village and taluk at once, so the
+                # request means "any of these columns holds this value".
+                _led_parts = [
+                    f"LOWER(TRIM(COALESCE(s.`{_col}`, ''))) = LOWER(TRIM(%s))"
+                    for _col in _led_hits
+                ]
+                _led_sql = ("(" + " OR ".join(_led_parts) + ")"
+                            if len(_led_parts) > 1 else _led_parts[0])
+                _led_col, _led_value = next(iter(_led_hits.items()))
+                add_filter_condition(
+                    _led_col,
+                    "IN" if len(_led_hits) > 1 else "EQUALS",
+                    _led_value, _led_sql, list(_led_hits.values()))
+                if len(_led_hits) > 1:
+                    filter_conditions[-1]["or_fields"] = list(_led_hits)
+                for _col in _led_hits:
+                    if f"s.`{_col}`" not in selected_fields:
+                        selected_fields.append(f"s.`{_col}`")
+
     requested_filter_fields = set()
     if lateral_requested:
         requested_filter_fields.add("student_type")
@@ -2610,10 +3381,12 @@ def build_deterministic_student_query(nq: str) -> dict | None:
         where_clauses.append("1=1")
 
     if is_count and not count_and_list:
+        _count_note = _correction_message()
         return {
             "operation": "select",
             "sql": "SELECT COUNT(*) AS total_students FROM students s WHERE " + " AND ".join(where_clauses),
             "params": params,
+            **({"message": _count_note} if _count_note else {}),
             "ast": {"intent": "COUNT", "conditions": filter_conditions, "logical_operator": "AND"},
         }
 
@@ -2666,6 +3439,8 @@ def build_deterministic_student_query(nq: str) -> dict | None:
     ))
     direction = "DESC" if desc else "ASC"
 
+    # Ranking compares the precise average, not the 2-decimal display value:
+    # two students showing 9.02 must still come out in score order.
     if explicit_sort == "cgpa":
         sort_by = f"ORDER BY {cgpa_expression} {direction}, {usn_sort_expr} ASC"
     elif explicit_sort == "sgpa_aggregate":
@@ -2715,6 +3490,11 @@ def build_deterministic_student_query(nq: str) -> dict | None:
                 "(SELECT m.sgpa FROM marks m WHERE m.usn=s.usn "
                 f"AND m.semester={target_semester} AND m.sgpa IS NOT NULL LIMIT 1) IS NOT NULL")
 
+    # Tell the staff member what a mistyped value was read as, instead of
+    # silently answering for a different district/caste/village than the one they
+    # typed. The substituted value is always one that exists in their own data.
+    _note = _correction_message()
+
     sql = (
         "SELECT " + ", ".join(selected_fields) + " FROM students s WHERE "
         + " AND ".join(where_clauses) + " " + sort_by
@@ -2725,6 +3505,7 @@ def build_deterministic_student_query(nq: str) -> dict | None:
         "operation": "select",
         "sql": sql,
         "params": params,
+        **({"message": _note} if _note else {}),
         "ast": {
             "intent": "COUNT" if is_count else ("TOP" if _rank_n is not None else "SEARCH"),
             "conditions": filter_conditions,
@@ -2754,11 +3535,27 @@ def _row_satisfies_filter_ast(row: dict, ast: dict) -> bool:
     for condition in ast.get("conditions", []):
         field = condition["field"]
         expected = condition["value"]
+        if field == "fee_status":
+            # The USN list was built from student_fees with the reports' own
+            # status normaliser, which a students row cannot show.
+            continue
+        or_fields = condition.get("or_fields")
+        if or_fields:
+            # The SQL ORs the value across several columns (a place name lives in
+            # both village and taluk), so re-check every column, not one.
+            wanted = {str(v).strip().casefold()
+                      for v in ([expected] if isinstance(expected, str)
+                                else (expected or []))}
+            if not any(str(row.get(f) or "").strip().casefold() in wanted
+                       for f in or_fields):
+                return False
+            continue
         if field == "student_type":
             actual = row.get("student_type")
             if actual is None or not str(actual).strip():
                 actual = parsed_usn.get("student_type")
-            matched = str(actual or "").strip().upper() == "LATERAL ENTRY"
+            matched = str(actual or "").strip().upper().replace(" ", "") in (
+                "LATERAL", "LATERALENTRY")
         elif field in ("current_sem", "current_year"):
             actual = row.get(field)
             if condition["operator"] == "PRESENT":
@@ -2772,6 +3569,10 @@ def _row_satisfies_filter_ast(row: dict, ast: dict) -> bool:
                     matched = int(float(actual)) == int(float(expected))
                 except (TypeError, ValueError):
                     matched = False
+        elif field == "backlogs":
+            # Rows carry no backlog column: the EXISTS subquery in the SQL is the
+            # authority for this filter, so nothing to re-check here.
+            matched = True
         elif field == "branch":
             actual = row.get("branch") or parsed_usn.get("branch")
             actual = _canonical_branch_code(actual)
@@ -2842,9 +3643,15 @@ def _row_satisfies_filter_ast(row: dict, ast: dict) -> bool:
                     matched = actual == int(expected)
             except (TypeError, ValueError):
                 matched = False
-        elif field == "location":
-            actual = " ".join(str(row.get(key) or "") for key in ("address", "village", "district"))
-            matched = str(expected).casefold() in actual.casefold()
+        elif field == "location" or condition.get("row_fields"):
+            # Must mirror the SQL's column list exactly: leaving taluk out
+            # rejected rows that only matched through the taluk column.
+            keys = condition.get("row_fields") or (
+                "address", "village", "taluk", "district")
+            actual = " ".join(str(row.get(key) or "") for key in keys)
+            wanted = condition.get("any_of") or [expected]
+            hit = any(str(value).casefold() in actual.casefold() for value in wanted)
+            matched = not hit if condition["operator"] == "NOT_CONTAINS" else hit
         elif field == "dob":
             try:
                 date_text = str(row.get("dob"))[:10]
@@ -2873,6 +3680,12 @@ def _row_satisfies_filter_ast(row: dict, ast: dict) -> bool:
                 matched = str(actual).upper() == str(expected).upper()
             elif operator == "NOT_EQUALS":
                 matched = str(actual).upper() != str(expected).upper()
+            elif operator == "IN":
+                matched = str(actual).strip().upper() in {
+                    str(value).strip().upper() for value in (expected or [])}
+            elif operator == "NOT_IN":
+                matched = str(actual).strip().upper() not in {
+                    str(value).strip().upper() for value in (expected or [])}
             elif operator == "CONTAINS":
                 any_of = condition.get("any_of")
                 if any_of:
@@ -2880,6 +3693,10 @@ def _row_satisfies_filter_ast(row: dict, ast: dict) -> bool:
                     matched = any(str(v).casefold() in hay for v in any_of)
                 else:
                     matched = str(expected).casefold() in str(actual or "").casefold()
+            elif operator == "NOT_CONTAINS":
+                hay = str(actual or "").casefold()
+                wanted = condition.get("any_of") or [expected]
+                matched = not any(str(v).casefold() in hay for v in wanted)
             else:
                 matched = False
         if not matched:
@@ -3303,6 +4120,12 @@ def _enforce_specific_select(nq: str, query_dict: dict) -> dict:
     # via a column we removed (→ spurious "results did not satisfy filter" 500).
     if re.search(r"CONCAT_WS\([^)]*\baddress\b", sql, re.I):
         return query_dict
+    # Same reason for a multi-column substring filter ("address contains X" searches
+    # address, permanent_address, current_address, village and taluk): dropping the
+    # extra columns made the validator reject rows that matched through them.
+    if any(condition.get("row_fields")
+           for condition in ((query_dict.get("ast") or {}).get("conditions") or [])):
+        return query_dict
     match = re.match(r'(?is)^\s*SELECT\s+(.*?)\s+FROM\s+', sql)
     if not match:
         return query_dict
@@ -3327,8 +4150,21 @@ def _enforce_specific_select(nq: str, query_dict: dict) -> dict:
         return query_dict
 
     query_dict = dict(query_dict)
+    # A filter column must survive the narrowing: "female students from Haveri
+    # district" requests only the district, and dropping s.gender from the
+    # projection made the result validator reject every row it re-checked
+    # ("results did not satisfy every requested filter", HTTP 500).
+    kept = [usn_expr, name_expr, col_expr]
+    for condition in ((query_dict.get("ast") or {}).get("conditions") or []):
+        field = str(condition.get("field") or "")
+        if not field or field == col or not re.fullmatch(r"[a-z_][a-z0-9_]*", field):
+            continue
+        item = next((i for i in items if re.search(
+            rf'(?i)^(?:\w+\.)?`?{re.escape(field)}`?(?:\s+AS\s+\w+)?$', i)), None)
+        if item and item not in kept:
+            kept.append(item)
     query_dict['sql'] = (
-        f"SELECT {usn_expr}, {name_expr}, {col_expr} "
+        f"SELECT {', '.join(kept)} "
         f"FROM {sql[match.end():]}"
     )
     return query_dict
@@ -3562,7 +4398,11 @@ def _attach_lifecycle_to_rows(usn: str, rows: list[dict]) -> None:
             cur.close()
         for row in rows:
             if lc:
-                row.setdefault("lifecycle_status", lc.get("current_status"))
+                # The register is authoritative for a student's current status;
+                # students.lifecycle_status is only the fallback when no register
+                # row exists, so the profile and the Lifecycle tab never disagree.
+                row["lifecycle_status"] = (lc.get("current_status")
+                                           or row.get("lifecycle_status"))
                 row["lifecycle_effective_date"] = str(lc.get("effective_date") or "")
                 row["last_enrolled_semester"] = lc.get("last_enrolled_semester")
                 row["lifecycle_scheme"] = lc.get("scheme")
@@ -3576,13 +4416,21 @@ def _attach_lifecycle_to_rows(usn: str, rows: list[dict]) -> None:
         pass
 
 
-def _check_ambiguity(data: list[dict], nq: str) -> dict | None:
+def _check_ambiguity(data: list[dict], nq: str, sql: str = "") -> dict | None:
     """
     If SQL returns multiple DISTINCT students by USN, and they share
     a similar name → return an ambiguity suggestion so user can choose.
     Returns None if no ambiguity (single student or genuinely different query).
     """
     if not data:
+        return None
+
+    # Identity disambiguation only makes sense for a lookup BY identity. When the
+    # executed SQL filters on any student attribute (branch, district, cgpa, ...),
+    # several students are the correct answer and must not be collapsed into a
+    # "which student do you mean?" prompt that throws the whole result away.
+    _where = sql.upper().find("WHERE")
+    if _where != -1 and re.search(r"\bs\.(?!usn\b|name\b)[a-z_]+", sql[_where:], re.I):
         return None
 
     if re.search(r'\brural\b|\burban\b|\b(?:students?|student records?)\b.*\b(?:from|in|at|near)\b', nq, re.I):
@@ -3698,14 +4546,19 @@ def suggest_students(q: str, current_user: dict = Depends(get_current_user)):
     Never returns empty for partial inputs ≥ 2 chars if any match exists.
     """
     from fuzzy_search import get_live_suggestions, _normalize
-    suggestions = get_live_suggestions(q.strip(), limit=5)
+    q = q.strip()
+    # The search box sends the last word being typed. A Kannada request word is
+    # not a name, so suggesting students for it only misleads staff.
+    if kn_is_structural_word(q):
+        return []
+    suggestions = get_live_suggestions(q, limit=5)
 
     # Annotate each suggestion with a human-readable match_type
-    q_norm = _normalize(q.strip())
+    q_norm = _normalize(q)
     for s in suggestions:
         name_norm = _normalize(s.get('name', ''))
         score = s.get('score', 0)
-        if name_norm == q_norm or s.get('usn', '').lower() == q.strip().lower():
+        if name_norm == q_norm or s.get('usn', '').lower() == q.lower():
             s['match_type'] = 'exact'
         elif name_norm.startswith(q_norm) or any(
             _normalize(t).startswith(q_norm)
@@ -3850,7 +4703,8 @@ def generate_query(request: QueryRequest, current_user: dict = Depends(get_curre
             preview["role_restricted"] = "Admin"
         return preview
 
-    partial_update = _build_update_request(nq) if re.match(r'^\s*update\b', nq, re.I) else None
+    partial_update = (_build_update_request(nq)
+                      if _UPDATE_INTENT_RE.match(nq) else None)
     if partial_update and partial_update.get("action_required") == "select_student":
         return {"action_required": "select_student", "suggestions": partial_update["suggestions"], "message": partial_update["message"]}
 
@@ -3903,7 +4757,7 @@ def generate_query(request: QueryRequest, current_user: dict = Depends(get_curre
             return {
                 "action_required": "none",
                 "query": cached_sql if debug_enabled else None,
-                "data": cached_result,
+                "data": mask_rows_for_role(cached_result, current_user["role"]),
                 "execution_time": round(time.time() - start, 4),
                 "cached": True,
                 "intent": intent,
@@ -3935,6 +4789,12 @@ def generate_query(request: QueryRequest, current_user: dict = Depends(get_curre
         raise HTTPException(400, "Could not generate a safe database query.")
 
     query_dict = _enforce_specific_select(nq, result["query_dict"])
+    # A structured update skips the SQL-shape validation below, so the role rule
+    # is checked here instead: a reader must not be handed a confirm button for
+    # a change the server is only going to refuse after they press it.
+    if str(query_dict.get('operation', '')).lower() in {'insert', 'update', 'delete'} \
+            and str(current_user.get('role', '')).strip().casefold() not in {'admin', 'staff'}:
+        raise HTTPException(403, "Only Staff and Admin can change student records.")
     if not (query_dict.get('operation') == 'update' and query_dict.get('executions')):
         validation = validate_sql_query(query_dict, current_user["role"])
         if not validation["is_valid"]:
@@ -3974,6 +4834,9 @@ def generate_query(request: QueryRequest, current_user: dict = Depends(get_curre
             "original_query": nq,
             "data": [],
             "execution_time": 0,
+            # INSERT/UPDATE previews carry a human sentence naming the student and
+            # the values about to change; staff confirm on that, not on SQL.
+            **({"message": query_dict["message"]} if query_dict.get("message") else {}),
         }
         if op == "delete":
             response["confirmation_token"] = create_confirmation_token(
@@ -4133,7 +4996,8 @@ def generate_query(request: QueryRequest, current_user: dict = Depends(get_curre
         # area, missing-data, OR/negation, ...) are explicit list queries, not
         # identity lookups. Multiple rows are the expected result, so they must
         # never be collapsed into a "which student?" disambiguation prompt.
-        ambiguity = None if deterministic_query else _check_ambiguity(data, nq)
+        ambiguity = None if deterministic_query else _check_ambiguity(
+            data, nq, (query_dict or {}).get("sql", ""))
         if ambiguity:
             return {
                 "action_required": "none",
@@ -4178,7 +5042,9 @@ def generate_query(request: QueryRequest, current_user: dict = Depends(get_curre
         return {
             "action_required": "none",
             "query": query_dict["sql"] if debug_enabled else None,
-            "data": data,
+            # The cache keeps the real rows (an Admin may answer the same question
+            # next); the answer this caller gets is masked for their role.
+            "data": mask_rows_for_role(data, current_user["role"]),
             "execution_time": round(elapsed, 4),
             "cached": False,
             "intent": intent,
@@ -4351,6 +5217,11 @@ def execute_confirmed(
                 if m2: usn = m2.group(1)
 
             if usn:
+                # The client posts this SQL verbatim, so the identity column the
+                # whole record hangs on is re-checked here, not only in /generate.
+                from routes_files import _valid_usn
+                if not _valid_usn(str(usn).strip()):
+                    raise HTTPException(400, "Invalid USN format.")
                 affected_usns = [usn]
 
         elif op == "update" and request.query_dict.get('executions'):
@@ -4396,7 +5267,14 @@ def execute_confirmed(
                     affected_usns = [v["usn"] for v in victims if v.get("usn")]
                     if affected_usns:
                         placeholders = ','.join(['%s'] * len(affected_usns))
+                        # A deleted student must not leave orphaned child rows:
+                        # fee and backlog aggregates read those tables directly,
+                        # and provenance rows would name a source file for a
+                        # student that no longer exists.
                         cur.execute(f"DELETE FROM marks WHERE usn IN ({placeholders})", tuple(affected_usns))
+                        cur.execute(f"DELETE FROM student_fees WHERE usn IN ({placeholders})", tuple(affected_usns))
+                        cur.execute(f"DELETE FROM student_backlogs WHERE usn IN ({placeholders})", tuple(affected_usns))
+                        cur.execute(f"DELETE FROM student_field_sources WHERE usn IN ({placeholders})", tuple(affected_usns))
 
                 if op == "update" and request.query_dict.get('executions'):
                     for creation in { (c['table'], c['column']): c for c in request.query_dict.get('column_creations', []) }.values():
@@ -4552,10 +5430,10 @@ def get_recent_activity(current_user: dict = Depends(get_current_user)):
 
 
 @router.post("/sync-vtu")
-def sync_vtu(current_user: dict = Depends(get_current_user)):
-    if current_user["role"] != "Staff":
-        return {"success": False, "message": "Unauthorized"}
-        
+def sync_vtu(current_user: dict = Depends(require_roles("Admin", "Staff"))):
+    # A bulk rewrite of every student's current semester. The role used to be
+    # checked here with a `return {"success": False}`, which answered HTTP 200 to
+    # a refusal — the caller could not tell a denied request from a completed sync.
     with db_conn() as conn:
         cur = conn.cursor(dictionary=True)
         cur.execute("SELECT usn, current_sem FROM students")
@@ -4611,16 +5489,24 @@ def sync_vtu(current_user: dict = Depends(get_current_user)):
 
 @router.get("/history")
 def get_history(limit: int = 10, current_user: dict = Depends(get_current_user)):
+    # A saved question is itself data: "students of X with Y" names a student.
+    # Before, only Staff was filtered and everyone else — Viewer included — read
+    # the whole table, i.e. the Admins' and Staffs' questions.
+    #
+    # `query_history` records `user_role` and no `username`, so the strongest
+    # isolation the stored schema allows is by role. Per-person history needs a
+    # column, which is a schema change the owner has not authorised.
     with db_conn() as conn:
         cur = conn.cursor(dictionary=True)
-        if current_user["role"] == "Staff":
+        if str(current_user["role"]).strip().casefold() == "admin":
             cur.execute(
-                "SELECT * FROM query_history WHERE user_role='Staff' "
-                "ORDER BY timestamp DESC LIMIT %s", (limit,)
+                "SELECT * FROM query_history ORDER BY timestamp DESC LIMIT %s", (limit,)
             )
         else:
             cur.execute(
-                "SELECT * FROM query_history ORDER BY timestamp DESC LIMIT %s", (limit,)
+                "SELECT * FROM query_history WHERE user_role=%s "
+                "ORDER BY timestamp DESC LIMIT %s",
+                (current_user["role"], limit)
             )
         rows = cur.fetchall()
         cur.close()
@@ -4682,6 +5568,33 @@ def get_analytics(current_user: dict = Depends(get_current_user)):
     }
 
 
+# Declared before /profile/{usn}: FastAPI matches routes in declaration order,
+# so a later static path under the same prefix would be swallowed by the dynamic
+# one and this door would be unreachable (D60).
+@router.get("/profile/search")
+def search_student_profiles(name: str, current_user: dict = Depends(get_current_user)):
+    """
+    Fuzzy name search returning up to 5 student profile cards.
+    Used when user types a name for the complete-profile intent.
+    """
+    if not name or len(name.strip()) < 2:
+        raise HTTPException(400, "Please provide at least 2 characters.")
+
+    # Handle Kannada input: extract search term
+    from kannada_processor import extract_search_term_multilingual
+    effective_name = extract_search_term_multilingual(name) or name.strip()
+
+    candidates = fuzzy_search_students(effective_name, limit=5, min_score=0.55)
+    if not candidates:
+        raise HTTPException(404, "No matching students found.")
+
+    return {
+        "candidates": candidates,
+        "search_term": effective_name,
+        "original_query": name,
+    }
+
+
 @router.get("/profile/{usn}")
 def get_student_profile_api(usn: str, current_user: dict = Depends(get_current_user)):
     """
@@ -4732,8 +5645,10 @@ def get_student_profile_api(usn: str, current_user: dict = Depends(get_current_u
         academic_rows = cur.fetchall()
         cur.close()
 
-    # Serialize dates / decimals
-    personal = _serialize_row(personal_row)
+    # Serialize dates / decimals, masked for the role that asked. A profile card
+    # is the most PII-dense screen in the app, so it follows the same policy as
+    # the reports: only Admin sees an identity number in full.
+    personal = _serialize_row(mask_rows_for_role(personal_row, current_user["role"]))
 
     # Graduation data
     graduation = {}
@@ -4756,30 +5671,6 @@ def get_student_profile_api(usn: str, current_user: dict = Depends(get_current_u
         "graduation": graduation,
         "has_personal": bool(personal),
         "has_academic": bool(academic),
-    }
-
-
-@router.get("/profile/search")
-def search_student_profiles(name: str, current_user: dict = Depends(get_current_user)):
-    """
-    Fuzzy name search returning up to 5 student profile cards.
-    Used when user types a name for the complete-profile intent.
-    """
-    if not name or len(name.strip()) < 2:
-        raise HTTPException(400, "Please provide at least 2 characters.")
-
-    # Handle Kannada input: extract search term
-    from kannada_processor import extract_search_term_multilingual
-    effective_name = extract_search_term_multilingual(name) or name.strip()
-
-    candidates = fuzzy_search_students(effective_name, limit=5, min_score=0.55)
-    if not candidates:
-        raise HTTPException(404, "No matching students found.")
-
-    return {
-        "candidates": candidates,
-        "search_term": effective_name,
-        "original_query": name,
     }
 
 

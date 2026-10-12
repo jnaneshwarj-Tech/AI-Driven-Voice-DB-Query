@@ -16,6 +16,7 @@ Design constraints (from the project spec):
 """
 from __future__ import annotations
 
+import difflib
 import json
 import re
 
@@ -114,7 +115,11 @@ _STATUS_ACTIONS = {
 
 def next_actions(from_status: str) -> list[dict]:
     """One-click actions offered for a student's current lifecycle status."""
-    canonical = normalize_status(from_status) or STATUS_ACTIVE
+    canonical = normalize_status(from_status)
+    if canonical is None:
+        # A stored value the register does not recognise (legacy import, manual
+        # edit): the student must still have a one-click way back to Active.
+        return _STATUS_ACTIONS[STATUS_OTHER]
     return _STATUS_ACTIONS.get(canonical, _STATUS_ACTIONS[STATUS_OTHER])
 
 
@@ -144,6 +149,7 @@ REASON_CATEGORIES = [
     "financial", "medical", "personal", "relocation",
     "academic", "disciplinary", "family", "other",
 ]
+_REASON_CATEGORY_SET = set(REASON_CATEGORIES)
 
 _REASON_CATEGORY_KEYWORDS = {
     "financial": ["financ", "money", "fee", "fees", "tuition", "economic",
@@ -171,6 +177,31 @@ def classify_reason_category(reason_text: str) -> str | None:
             if kw in text:
                 return cat
     return "other"
+
+
+def normalize_reason_category(value) -> str | None:
+    """Canonical form of a category, or None when it is not one the register
+    knows. Comparison is spacing/case tolerant because staff type both."""
+    v = (value or "").strip().lower()
+    return v if v in _REASON_CATEGORY_SET else None
+
+
+def resolve_reason_category(value, reason_text=None) -> str | None:
+    """The category that gets STORED. An explicit one is validated (anything
+    outside the vocabulary is refused, because an unfilterable value is dead
+    data the dropdown and the NL questions can never return). With no explicit
+    category, derive one from the free-text reason so a reason typed into the
+    status dialog becomes filterable data instead of a loose sentence.
+    Raises ValueError for a rejected value so callers can answer 400."""
+    text = (value or "").strip()
+    if not text:
+        return classify_reason_category(reason_text)
+    canon = normalize_reason_category(text)
+    if canon is None:
+        raise ValueError(
+            f"Unknown reason category '{text}'. "
+            f"Use one of: {', '.join(REASON_CATEGORIES)}.")
+    return canon
 
 
 # ── Natural-language lifecycle RECORD command parsing (spec §1) ───────────────
@@ -204,8 +235,7 @@ def is_lifecycle_record_command(nq: str) -> bool:
     text = (nq or "").strip()
     if not text:
         return False
-    has_status_verb = any(rx.search(text) for rx, _ in _STATUS_VERBS)
-    if not has_status_verb:
+    if not _extract_status(text):
         return False
     # A read query that merely mentions the words ("list all dropouts") is not a
     # record command, unless it also carries an explicit record imperative.
@@ -221,7 +251,36 @@ def _extract_status(text: str) -> str | None:
     for rx, status in _STATUS_VERBS:
         if rx.search(text):
             return status
-    return None
+    return _fuzzy_status(text)
+
+
+# Mistyped status words. Staff type fast on a shared keyboard and 'discontious',
+# 'droput' or 'rejonied' are the same instruction — the parser has to meet them
+# halfway instead of refusing the record.
+_STATUS_KEYWORD_FORMS = {
+    STATUS_DROPOUT: ("dropout", "dropped", "dropouts"),
+    STATUS_TEMP_DISCONTINUED: ("discontinue", "discontinued", "discontinuation"),
+    STATUS_READMISSION_REQUESTED: ("readmission", "readmit", "readmitted"),
+    STATUS_REJOINED: ("rejoin", "rejoined", "rejoining"),
+    STATUS_GRADUATED: ("graduate", "graduated", "graduation"),
+    STATUS_TRANSFERRED: ("transfer", "transferred", "transfered"),
+}
+
+
+def _fuzzy_status(text: str) -> str | None:
+    """Closest canonical status keyword across the words of a command, or None.
+    A word only counts as a near-miss when it shares the keyword's first letter
+    and is at least 80% similar, so unrelated words are never read as a status."""
+    best_status, best_score = None, 0.0
+    for tok in re.findall(r"[a-zA-Z]{6,}", (text or "").lower()):
+        for status, forms in _STATUS_KEYWORD_FORMS.items():
+            for form in forms:
+                if tok[0] != form[0]:
+                    continue
+                score = difflib.SequenceMatcher(None, tok, form).ratio()
+                if score > best_score:
+                    best_status, best_score = status, score
+    return best_status if best_score >= 0.8 else None
 
 
 _DATE_ISO_RE = re.compile(r'\b(\d{4}-\d{2}-\d{2})\b')
@@ -229,12 +288,34 @@ _DATE_DMY_RE = re.compile(r'\b(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})\b')
 _MONTH_RE = re.compile(r'\b(?:on|in|dated?|effective)\s+'
                        r'(january|february|march|april|may|june|july|august|'
                        r'september|october|november|december)\s+(\d{4})\b', re.I)
-_SEM_RE = re.compile(r'\b(\d{1,2})(?:st|nd|rd|th)?\s*(?:sem(?:ester)?)\b', re.I)
-_AY_RE = re.compile(r'\b(\d{4})\s*[-–/]\s*(\d{2,4})\b')
+# Both word orders are spoken: '5th semester' and 'semester 5', and staff add
+# filler ('last enrolled semester was 6'). Neither may lose the column.
+_SEM_RE = re.compile(
+    r'\b(?:sem(?:ester)?\s*(?:was|is|of|in|:)?\s*(\d{1,2})(?:st|nd|rd|th)?'
+    r'|(\d{1,2})(?:st|nd|rd|th)?\s*sem(?:ester)?)\b', re.I)
+# The last group must not be the day of a full date: 'discontinued on
+# 2026-10-01' carries an effective date, not the academic year '2026-10'.
+_AY_RE = re.compile(r'\b(\d{4})\s*[-–/]\s*(\d{2,4})(?!\s*[-/.]\s*\d{1,2}\b)')
 _YEAR_RE = re.compile(r'\b(?:in|during|since|year)\s+(\d{4})\b', re.I)
 _REASON_RE = re.compile(r'(?:due to|because of|reason(?:\s*[:\-]?\s*)?|owing to|on account of)\s+'
                         r'(.+?)(?:[.,;]|$)', re.I | re.S)
 _DOC_RE = re.compile(r'(?:doc(?:ument)?|ref(?:erence)?|challan|certificate)\s*(?:no\.?|number|id)?\s*[:\-]?\s*([A-Za-z0-9\-/]+)', re.I)
+
+# Words that belong to the instruction, never to the student's name. Matched with
+# \b so a name keeps its letters: 'mark Ashoka as discontinued' must search for
+# 'Ashoka', not 'hoka'.
+_NAME_STOPWORDS = (
+    "please", "kindly", "the", "a", "an", "student", "students", "of", "named",
+    "called", "for", "record", "mark", "note", "log", "enter", "set", "as",
+    "usn", "on", "in", "from", "to", "is", "was", "has", "have", "who", "that",
+    "his", "her", "him", "he", "she", "due to", "because of", "owing to",
+    "reason", "given", "status", "discontinue", "discontinued", "discontinuation",
+    "dropout", "dropouts", "drop", "out", "dropped", "left", "college",
+    "readmission", "readmit", "readmitted", "rejoin", "rejoined", "rejoining",
+    "graduate", "graduated", "graduation", "transfer", "transferred", "transfered",
+    "studies", "study", "back", "active", "came", "come")
+_NAME_STOP_RE = re.compile(
+    r"\b(?:%s)\b" % "|".join(sorted(set(_NAME_STOPWORDS), key=len, reverse=True)), re.I)
 
 
 def _to_iso_date(text: str) -> tuple[str | None, str | None]:
@@ -260,6 +341,37 @@ def _to_iso_date(text: str) -> tuple[str | None, str | None]:
     return None, None
 
 
+# The spans _to_iso_date understands, in the same order it tries them.
+_DATE_SPANS = (_DATE_ISO_RE, _DATE_DMY_RE, _MONTH_RE, _YEAR_RE)
+# Function words a removed date leaves behind at the end of the reason.
+_TRAILING_DATE_JUNK_RE = re.compile(
+    r"(?:\s+\b(?:for|on|in|of|the|a|dated|effective|last|during|since|year|and|by|to)\b)+\s*$",
+    re.I)
+
+
+def _strip_date_phrase(reason: str | None, academic_year: str | None = None) -> str | None:
+    """Drop from a spoken reason the date that was read as the effective date.
+
+    Staff type 'discontinued due to medical reasons on 01-10-2026': the date
+    belongs to the event's EFFECTIVE DATE column, and leaving it inside the
+    reason puts the same number in two columns and makes the register's reason
+    text unreadable when staff filter or export it. Only spans the parser
+    actually understood are removed (the caller strips just when it found one),
+    so a reason carrying an unrecognised date keeps the person's own words
+    rather than losing information.
+    """
+    if not reason:
+        return reason
+    out = reason
+    for rx in _DATE_SPANS:
+        out = rx.sub(" ", out)
+    if academic_year:
+        out = _AY_RE.sub(" ", out)
+    out = re.sub(r"\s+", " ", out.strip())
+    out = _TRAILING_DATE_JUNK_RE.sub("", out)
+    return out.strip(" ,;.-:") or None
+
+
 def parse_lifecycle_command(nq: str) -> dict:
     """Extract a structured lifecycle-record intent from natural language
     (already normalized toward English by the caller). Returns a dict with:
@@ -273,23 +385,30 @@ def parse_lifecycle_command(nq: str) -> dict:
 
     reason_m = _REASON_RE.search(text)
     reason_text = re.sub(r"\s+", " ", reason_m.group(1)).strip() if reason_m else None
-    reason_category = classify_reason_category(reason_text)
 
     effective_date, discontinue_year = _to_iso_date(text)
-    sem_m = _SEM_RE.search(text)
-    semester = int(sem_m.group(1)) if sem_m and 0 < int(sem_m.group(1)) <= 12 else None
     ay_m = _AY_RE.search(text)
     academic_year = f"{ay_m.group(1)}-{ay_m.group(2)}" if ay_m else None
+    # The date belongs in EFFECTIVE DATE / ACADEMIC YEAR, not inside the reason
+    # text a reader scans in the register. Strip only when it really was
+    # understood, so an unrecognised date is never silently discarded.
+    if effective_date or discontinue_year or academic_year:
+        reason_text = _strip_date_phrase(reason_text, academic_year)
+    reason_category = classify_reason_category(reason_text)
+    sem_m = _SEM_RE.search(text)
+    sem_num = (sem_m.group(1) or sem_m.group(2)) if sem_m else None
+    semester = int(sem_num) if sem_num and 0 < int(sem_num) <= 12 else None
     doc_m = _DOC_RE.search(text)
     document_ref = doc_m.group(1) if doc_m else None
 
-    # target_text = the name to resolve when no USN is present.
+    # target_text = the name to resolve when no USN is present. The instruction
+    # words are removed on WORD boundaries only (a bare 'a' or 'as' inside a name
+    # must survive: 'Ashoka' is not 'hoka'), and the reason clause is dropped
+    # first because 'due to illness' describes the status, not the student.
     target_text = ""
     if not usn:
-        t = re.sub(r'(?:please|kindly|the|a|an|student|of|named|for|record|mark|as|usn|'
-                   r'due to|because of|reason|on|in|from|discontinued?|dropout|dropped out|'
-                   r'left college|readmission|rejoined|graduated|transferred|studies)', ' ',
-                   text, flags=re.I)
+        t = text.replace(reason_m.group(0), " ") if reason_m else text
+        t = _NAME_STOP_RE.sub(" ", t)
         t = re.sub(r'\s+', ' ', t).strip(" .,;:!?-")
         target_text = t
 
@@ -325,7 +444,11 @@ def is_duplicate_lifecycle_event(cur, usn, to_status, effective_date=None,
         return False
     if effective_date and str(last.get("effective_date") or "") != str(effective_date):
         return False
-    if reason_category is not None and (last.get("reason_category") or None) != (reason_category or None):
+    # Comparison is spacing/case tolerant: 'Medical' and 'medical' are the same
+    # record to a human, and a letter-case difference must not be a second event.
+    last_cat = (last.get("reason_category") or "").strip().lower() or None
+    new_cat = (reason_category or "").strip().lower() or None
+    if new_cat is not None and last_cat != new_cat:
         return False
     return True
 

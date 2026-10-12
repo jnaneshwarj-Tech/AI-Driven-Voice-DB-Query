@@ -281,10 +281,16 @@ def validate_sql_query(query_dict, user_role: str) -> dict:
     if operation in _READ_OPERATIONS and _DANGEROUS_READS.search(masked_sql):
         return {"is_valid": False, "reason": "Unsafe read operation is not allowed."}
     role = str(user_role).strip().lower()
-    if role not in {"admin", "staff"}:
-        return {"is_valid": False, "reason": f"Unknown role: {user_role}"}
     if operation not in _READ_OPERATIONS | _WRITE_OPERATIONS:
         return {"is_valid": False, "reason": f"Operation '{operation}' is not allowed."}
+    # A Viewer/Student is a reader, not a writer: their questions used to be
+    # refused here with "Unknown role", which the route then reported as
+    # "I could not understand that request" — a reading role was locked out of
+    # the one feature the app exists for, and the message blamed their English.
+    # Reads are open to any authenticated role; the PII each role may see is
+    # decided by report_service.mask_for_role on the way out.
+    if operation in _WRITE_OPERATIONS and role not in {"admin", "staff"}:
+        return {"is_valid": False, "reason": f"Role {user_role} may not change student data."}
     if operation == "DELETE" and role != "admin":
         return {"is_valid": False, "reason": "Delete permission is available only to Admin."}
 

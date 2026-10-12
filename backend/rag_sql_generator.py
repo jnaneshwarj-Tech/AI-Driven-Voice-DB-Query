@@ -733,6 +733,14 @@ def _student_lookup_query(effective_query: str):
         identity_sql = "UPPER(s.usn) = %s"
         identity_value = usn_match.group(0).upper()
     elif target:
+        # A phrase that still talks about students in general, or asks for a
+        # substring, is a filter over the batch rather than the name of one
+        # person. Comparing s.name to the whole clause answered "show students
+        # whose name contains Ra" with zero rows. A single "student" in the
+        # phrase ("details of student Manoj Kumar") is still a person lookup.
+        if re.search(r"\bstudents\b|\b(?:who|whose|that)\b", target, re.I) or re.search(
+                r"\b(?:contains?|containing|includes?|including)\b", lower_query):
+            return None
         identity_sql = "LOWER(TRIM(s.name)) = LOWER(%s)"
         identity_value = target
     else:
@@ -904,9 +912,10 @@ _BRANCH_NORMALIZATION: dict[str, tuple[str, ...]] = {
     "EE":    ("EE", "EEE", "ELECTRICAL", "ELECTRICAL AND ELECTRONICS ENGINEERING"),
     "ME":    ("ME", "MECH", "MECHANICAL", "MECHANICAL ENGINEERING"),
     "MECH":  ("ME", "MECH", "MECHANICAL", "MECHANICAL ENGINEERING"),
-    "CIVIL": ("CV", "CIVIL", "CIVIL ENGINEERING"),
-    "CE":    ("CV", "CIVIL", "CIVIL ENGINEERING"),
-    "CV":    ("CV", "CIVIL", "CIVIL ENGINEERING"),
+    "CIVIL": ("CV", "CIV", "CIVIL", "CIVIL ENGINEERING"),
+    "CIV":   ("CV", "CIV", "CIVIL", "CIVIL ENGINEERING"),
+    "CE":    ("CV", "CIV", "CIVIL", "CIVIL ENGINEERING"),
+    "CV":    ("CV", "CIV", "CIVIL", "CIVIL ENGINEERING"),
     "AIML":  ("AIML", "AI ML", "ARTIFICIAL INTELLIGENCE AND MACHINE LEARNING"),
     "AI":    ("AI", "AIML", "ARTIFICIAL INTELLIGENCE"),
     "AIDS":  ("AIDS", "AI DS", "ARTIFICIAL INTELLIGENCE AND DATA SCIENCE"),
@@ -1010,6 +1019,7 @@ def _extract_branches(eq: str) -> list[str]:
         (r"\bece\b", "EC"),
         (r"\beee\b", "EEE"),
         (r"\bmech\b", "ME"),
+        (r"\bciv\b", "CV"),
         (r"\baiml\b", "AIML"),
         (r"\baids\b", "AIDS"),
         (r"\bcsd\b", "CSD"),

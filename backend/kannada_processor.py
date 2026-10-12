@@ -448,6 +448,94 @@ def is_complete_profile_intent(text: str) -> bool:
 # SECTION 4: QUERY NORMALIZATION
 # ─────────────────────────────────────────────────────────────────────────────
 
+# "Show details of <name>" phrased in Kannada word order. The head noun is
+# excluded from the name group so a nameless "ವಿವರಗಳು ತೋರಿಸಿ" is not
+# rewritten into a lookup of the word "details" itself.
+_KN_QUALIFIER = r"(?:ಸಂಪೂರ್ಣ|ಎಲ್ಲಾ|ಎಲ್ಲ|ಪೂರ್ಣ)"
+_KN_DETAIL_NOUNS = r"(?:ವಿವರಗಳು|ವಿವರ|ಮಾಹಿತಿ|ದಾಖಲೆಗಳು|ದಾಖಲೆ)"
+_KN_DETAIL_VERBS = r"(?:ತೋರಿಸಿ|ಪ್ರದರ್ಶಿಸಿ|ಕೊಡಿ|ಕೊಡು|ನೀಡಿ|ಹುಡುಕಿ|ಬೇಕು|ಬೇಕೋ)"
+_KN_POSSESSIVE = r"(?:ಅವರ|ಅವಳ|ಅವನ)"
+# Kannada words have no ASCII word boundary, so "ಎ" of "ಎಲ್ಲಾ" would otherwise
+# be a legal match start and the structural word would be split in half.
+_KN_AT_START = r"(?<![\u0C80-\u0CFF])"
+# The name in front of the Kannada request words is often Latin
+# ("Ananya Ananya ವಿವರಗಳು ತೋರಿಸಿ"), so the name group accepts any script.
+_KN_NOT_NOUN = (rf"{_KN_AT_START}(?!{_KN_QUALIFIER}|{_KN_DETAIL_NOUNS}|{_KN_POSSESSIVE}|{_KN_DETAIL_VERBS})"
+                r"\S+")
+_KN_DETAIL_FRAME_RE = re.compile(
+    rf"(?P<who>{_KN_NOT_NOUN}(?:\s+{_KN_NOT_NOUN})*)"
+    rf"(?:\s*{_KN_POSSESSIVE})?"
+    rf"(?:\s*{_KN_QUALIFIER})?"
+    rf"\s*(?:{_KN_AT_START}{_KN_DETAIL_NOUNS})(?![\u0C80-\u0CFF])"
+    rf"(?:\s*{_KN_DETAIL_VERBS}(?![\u0C80-\u0CFF]))?"
+)
+
+
+def _detail_frame_replacement(match: re.Match) -> str:
+    who = match.group("who").strip()
+    qual = "complete " if match.group(0).count("ಸಂಪೂರ್ಣ") or \
+        match.group(0).count("ಎಲ್ಲಾ") or match.group(0).count("ಪೂರ್ಣ") else ""
+    return f"show {qual}details of {who}"
+
+
+# The same verb-final order arrives romanised from the search box
+# ("Ananya Ananya avara vivara torisi"), so it needs its own frame. The Kannada
+# markers are distinctive enough that ordinary English never matches.
+_KN_R_POSSESSIVE = r"avara|avar|avan|aval|adara"
+_KN_R_QUALIFIER = r"sampoorna|sampurna|sampoor|poorna|purna|ella|yella|ellaa"
+_KN_R_NOUN = r"vivara|viwara|vaiyaktika|mahiti|mahithi|maahiti|daakhile|details|detail|information|info|records|profile"
+_KN_R_VERB = r"torisi|thorisi|tori|thori|kodu|kodi|kodok|beku|biku|huduki|nidedi"
+# Staff mix scripts in one query: a Kannada-script name typed with romanised
+# request words ("ಲಕ್ಷ್ಮೀ ದೇವಿ avara vivara torisi"), so the name group accepts
+# either script while still refusing structural words of either spelling.
+_KN_R_KN_STRUCT = rf"(?:{_KN_POSSESSIVE}|{_KN_QUALIFIER}|{_KN_DETAIL_NOUNS}|{_KN_DETAIL_VERBS})"
+_KN_R_NOT_STRUCT = (rf"(?!(?:{_KN_R_POSSESSIVE}|{_KN_R_QUALIFIER}|{_KN_R_NOUN}|{_KN_R_VERB})\b)"
+                    rf"(?!(?:{_KN_R_KN_STRUCT})(?:\s|$))"
+                    r"(?:[A-Za-z][A-Za-z']*(?![A-Za-z'])|[\u0C80-\u0CFF]+)")
+_KN_R_DETAIL_FRAME_RE = re.compile(
+    rf"(?P<who>{_KN_R_NOT_STRUCT}(?:\s+{_KN_R_NOT_STRUCT})*)"
+    rf"(?:\s+(?P<poss>{_KN_R_POSSESSIVE}|{_KN_POSSESSIVE}))?"
+    rf"(?:\s+(?P<qual>{_KN_R_QUALIFIER}|{_KN_QUALIFIER}))?"
+    rf"\s+(?P<noun>{_KN_R_NOUN})"
+    rf"(?:\s+(?P<verb>{_KN_R_VERB}))?\b",
+    re.I,
+)
+
+
+def _roman_detail_frame(match: re.Match) -> str:
+    # Without a possessive or a Kannada verb the phrase is plain English
+    # ("show details of Rahul"), which the engine already understands.
+    if not match.group("poss") and not match.group("verb"):
+        return match.group(0)
+    qual = match.group("qual") or ""
+    lowered = qual.lower()
+    if lowered.startswith(("sam", "poo", "pur")) or qual.startswith(("ಸಂಪೂ", "ಪೂ")):
+        prefix = "complete "
+    else:
+        prefix = "all " if qual else ""
+    return f"show {prefix}details of {match.group('who').strip()}"
+
+
+_KN_STRUCT_WORD_RE = re.compile(
+    rf"^(?:{_KN_POSSESSIVE}|{_KN_QUALIFIER}|{_KN_DETAIL_NOUNS}|{_KN_DETAIL_VERBS})$")
+_KN_R_STRUCT_WORD_RE = re.compile(
+    rf"^(?:{_KN_R_POSSESSIVE}|{_KN_R_QUALIFIER}|{_KN_R_NOUN}|{_KN_R_VERB})$", re.I)
+
+
+def is_structural_word(word: str) -> bool:
+    """True when a lone token is a Kannada request word (ತೋರಿಸಿ, vivara, avara, …).
+
+    Autocomplete must not fuzzy-match these against student names: "torisi" is
+    closer to "Trisha" than any name the staff member could mean.
+    """
+    w = (word or "").strip()
+    if not w:
+        return False
+    if w in _KANNADA_KEYWORDS or w.casefold() in _ROMAN_KN_MARKERS:
+        return True
+    return bool(_KN_STRUCT_WORD_RE.match(w) or _KN_R_STRUCT_WORD_RE.match(w))
+
+
 def normalize_query(text: str) -> tuple[str, str]:
     """
     Normalize a Kannada/mixed/English query for the existing pipeline.
@@ -475,6 +563,14 @@ def normalize_query(text: str) -> tuple[str, str]:
         r"students whose father name is \1",
         result,
     )
+
+    # Kannada is verb-final: "ಮನೋಜ ಕುಮಾರ್ ಅವರ ವಿವರಗಳು ತೋರಿಸಿ" maps
+    # word-for-word to "Manoj Kumar of details show", a string no English pattern
+    # in the query engine recognises, so the request fell to the LLM and returned
+    # other students. Reorder the "person + ಅವರ + details + verb" frame into the
+    # canonical English lookup before the per-word replacements run.
+    result = _KN_DETAIL_FRAME_RE.sub(_detail_frame_replacement, result)
+    result = _KN_R_DETAIL_FRAME_RE.sub(_roman_detail_frame, result)
 
     # Replace ordinal suffixes: "3ನೇ" → "3rd", "5ನೇ" → "5th"
     def _ordinal_replace(m: re.Match) -> str:
@@ -576,7 +672,11 @@ def extract_search_term_multilingual(text: str) -> str | None:
     for tok in tokens:
         if not tok:
             continue
-        tok_lower = tok.lower().rstrip("'s")
+        # A trailing possessive is dropped ("Sneha's" → "sneha"), but a plain
+        # word-final "s" must survive: rstrip("'s") turned "details" into
+        # "detail", so the stop word was missed and the intent word leaked into
+        # the extracted student name ("ಮನೋಜ ಕುಮಾರ್ details").
+        tok_lower = re.sub(r"('s|s')$", "", tok.lower())
         if tok_lower in _STOP_WORDS_EN:
             continue
         if tok in _STOP_WORDS_KN:

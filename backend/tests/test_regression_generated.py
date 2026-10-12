@@ -139,9 +139,19 @@ class EqualityFieldTests(unittest.TestCase):
                              f"area_type {value} mismatch")
 
     def test_student_type(self):
-        exp = run_expected("SELECT usn FROM students WHERE student_type=%s", ["Lateral Entry"])
+        # Restated from the documented rule: a student is lateral when the stored
+        # type says so (any spelling), or when nothing is stored and the USN serial
+        # is 400+. The old expectation compared against the literal 'Lateral Entry',
+        # a value this data never holds, so both sides were empty and the test
+        # passed while the engine actually returned zero lateral students.
+        exp = run_expected(
+            "SELECT usn FROM students s WHERE UPPER(TRIM(COALESCE(s.student_type,''))) LIKE 'LATERAL%' "
+            "OR (TRIM(COALESCE(s.student_type,''))='' "
+            "AND UPPER(s.usn) REGEXP '^[0-9][A-Z]{2,3}[0-9]{2}[A-Z]{2,4}[0-9]{3}' "
+            "AND CAST(RIGHT(s.usn, 3) AS UNSIGNED) >= 400)")
         q = "show lateral entry students"
         self.assertEqual(app_usns(q), sorted(r["usn"] for r in exp), "lateral mismatch")
+        self.assertTrue(exp, "no lateral-entry students in this database; the case is unmeasurable")
 
 
 class ScalarCountTests(unittest.TestCase):

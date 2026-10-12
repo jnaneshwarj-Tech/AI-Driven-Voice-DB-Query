@@ -11,7 +11,7 @@ import time
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from database import db_conn
-from auth import get_current_user
+from auth import get_current_user, require_roles
 from config import settings
 
 router = APIRouter(prefix="/api/monitor", tags=["Database Monitoring"])
@@ -77,7 +77,7 @@ def db_health(current_user: dict = Depends(get_current_user)):
 
 
 @router.get("/db-stats")
-def db_stats(current_user: dict = Depends(get_current_user)):
+def db_stats(current_user: dict = Depends(require_roles("Admin", "Staff"))):
     """
     Detailed database statistics:
     - Table row counts and sizes
@@ -146,7 +146,7 @@ def db_stats(current_user: dict = Depends(get_current_user)):
 
 
 @router.get("/performance")
-def get_performance(current_user: dict = Depends(get_current_user)):
+def get_performance(current_user: dict = Depends(require_roles("Admin", "Staff"))):
     """
     Query performance insights:
     - Recent query history with execution times

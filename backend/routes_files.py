@@ -64,6 +64,9 @@ _FEE_COLS = {
     'fee_tuition_remaining': ('TUITION_REMAINING', 0),
 }
 
+# 'fee_hostel_2' → ('HOSTEL', 2); 'fee_pending' → ('PENDING', 0)
+_FEE_HEADING_RE = re.compile(r'^fee_(.+?)(?:_([1-8]))?$')
+
 _COL_MAX = {
     'usn': 100, 'name': 100, 'father_name': 150, 'mother_name': 150,
     'blood_group': 10, 'status': 20, 'gender': 10, 'religion': 50,
@@ -128,7 +131,42 @@ def _clean_date(val):
             return pd.to_datetime(s, dayfirst=True).strftime('%Y-%m-%d')
     except Exception: return None
 
+
+# Columns a spreadsheet holds as *text* even though Excel reads them as numbers.
+_DIGIT_COLS = {'phone', 'aadhar_no', 'emergency_contact_number',
+               'parents_phone', 'pin_code'}
+_TRAILING_ZEROS_RE = re.compile(r'^(\d+)[.,]0+$')
+
+
+
+def _clean_digits(val, max_len=None):
+    """A phone/ID number cell keeps its identity: Excel's 9000007777.0 or
+    9.000007777e+09 must not be stored as a decimal number or scientific text."""
+    s = _clean_str(val, max_len)
+    if s is None:
+        return None
+    m = _TRAILING_ZEROS_RE.match(s.replace(' ', ''))
+    if m:
+        return m.group(1)
+    try:
+        as_float = float(s)
+    except (TypeError, ValueError):
+        return s
+    # 9.000007777E+9 is the same phone number Excel meant; beyond 15 digits a
+    # float stops being exact, so that text is left as the person typed it.
+    if as_float == int(as_float) and len(s) <= 15 and int(as_float) > 0:
+        return str(int(as_float))
+    return s
+
+
+def _clean_cell(col, raw, max_len=None):
+    if col in _DIGIT_COLS:
+        return _clean_digits(raw, max_len)
+    return _clean_str(raw, max_len)
+
+
 def _valid_usn(usn: str) -> bool:
+
     if not usn or len(usn) > 100: return False
     if ' ' in usn: return False
     return bool(_USN_RE.match(usn))
@@ -256,8 +294,16 @@ def _purge_expired_trash(cur):
     return purged
 
 
-def _reconcile_trashed_file_records(cur):
-    """Remove legacy file-only student rows left behind by older soft deletes."""
+def _reconcile_trashed_file_records(cur, conn, actor: str = "system"):
+    """Remove legacy file-only student rows left behind by older soft deletes.
+
+    This is real data loss, so it may never be silent or unrecoverable: every
+    file that retires students leaves a FILE_DATA_PURGE audit row naming them and
+    an undo snapshot holding their state — the trashed file's own delete token
+    when it has one, otherwise a fresh DELETE snapshot.
+    """
+    from routes_undo import _capture_state, create_undo_snapshot, finalize_undo_snapshot
+
     cur.execute(
         "SELECT filename, trash_undo_token FROM uploaded_files "
         "WHERE trashed_at IS NOT NULL AND data_reconciled_at IS NULL"
@@ -271,6 +317,7 @@ def _reconcile_trashed_file_records(cur):
         candidate_usns = [row["usn"] for row in cur.fetchall()]
         removed_usns = []
 
+        to_remove = []
         for usn in candidate_usns:
             cur.execute(
                 "SELECT COUNT(*) AS source_count FROM student_field_sources "
@@ -279,29 +326,55 @@ def _reconcile_trashed_file_records(cur):
             )
             if cur.fetchone()["source_count"]:
                 continue
+            to_remove.append(usn)
+
+        undo_token = trashed_file.get("trash_undo_token")
+        delete_snapshot = None
+        if undo_token:
+            cur.execute(
+                "SELECT snapshot_data FROM global_undo_snapshots "
+                "WHERE undo_token=%s AND committed=1 AND undone=0",
+                (undo_token,),
+            )
+            delete_snapshot = cur.fetchone()
+        if to_remove and delete_snapshot is None:
+            undo_token = create_undo_snapshot(
+                "DELETE", to_remove, actor,
+                f"Trashed file {filename} retired {len(to_remove)} student(s) it introduced alone",
+                conn=conn)
+
+        for usn in to_remove:
             cur.execute("DELETE FROM marks WHERE usn=%s", (usn,))
+            cur.execute("DELETE FROM student_fees WHERE usn=%s", (usn,))
+            cur.execute("DELETE FROM student_backlogs WHERE usn=%s", (usn,))
             cur.execute("DELETE FROM students WHERE usn=%s AND source_file=%s", (usn, filename))
             if cur.rowcount:
                 removed_usns.append(usn)
                 changed = True
 
-        if removed_usns and trashed_file.get("trash_undo_token"):
-            from routes_undo import _capture_state
+        if not removed_usns:
             cur.execute(
-                "SELECT snapshot_data FROM global_undo_snapshots "
-                "WHERE undo_token=%s AND committed=1 AND undone=0",
-                (trashed_file["trash_undo_token"],),
+                "UPDATE uploaded_files SET data_reconciled_at=NOW() "
+                "WHERE filename=%s AND trashed_at IS NOT NULL",
+                (filename,),
             )
-            snapshot = cur.fetchone()
-            if snapshot:
-                snapshot_data = _json.loads(snapshot["snapshot_data"])
-                affected_usns = snapshot_data.get("affected_usns", removed_usns)
-                post_state = _capture_state(cur, affected_usns)
-                cur.execute(
-                    "UPDATE global_undo_snapshots SET post_state_data=%s "
-                    "WHERE undo_token=%s AND committed=1 AND undone=0",
-                    (_json.dumps(post_state), trashed_file["trash_undo_token"]),
-                )
+            continue
+
+        write_audit_log("FILE_DATA_PURGE", actor, "", "students",
+                        ",".join(removed_usns[:20]),
+                        f"Removed {len(removed_usns)} student(s) introduced only by "
+                        f"trashed file {filename}")
+        if delete_snapshot is not None:
+            affected_usns = _json.loads(delete_snapshot["snapshot_data"]).get(
+                "affected_usns", removed_usns)
+            post_state = _capture_state(cur, affected_usns)
+            cur.execute(
+                "UPDATE global_undo_snapshots SET post_state_data=%s "
+                "WHERE undo_token=%s AND committed=1 AND undone=0",
+                (_json.dumps(post_state), trashed_file["trash_undo_token"]),
+            )
+        else:
+            finalize_undo_snapshot(undo_token, removed_usns, conn)
 
         cur.execute(
             "UPDATE uploaded_files SET data_reconciled_at=NOW() "
@@ -340,6 +413,8 @@ def _reconcile_orphaned_source_records(cur, filenames, actor: str = "system", co
                          conn=conn)
     for usn in orphaned_usns:
         cur.execute("DELETE FROM marks WHERE usn=%s", (usn,))
+        cur.execute("DELETE FROM student_fees WHERE usn=%s", (usn,))
+        cur.execute("DELETE FROM student_backlogs WHERE usn=%s", (usn,))
         cur.execute("DELETE FROM students WHERE usn=%s", (usn,))
     write_audit_log("FILE_DATA_PURGE", actor, "", "students",
                     ",".join(orphaned_usns[:20]),
@@ -356,7 +431,7 @@ def reconcile_trashed_file_data():
     """
     with db_conn() as conn:
         cur = conn.cursor(dictionary=True)
-        changed = _reconcile_trashed_file_records(cur)
+        changed = _reconcile_trashed_file_records(cur, conn, "system")
         purged = _purge_expired_trash(cur)
         changed = _reconcile_orphaned_source_records(cur, purged, "system", conn) or changed
         if changed:
@@ -387,7 +462,7 @@ def _student_payload(row: dict, name: str | None = None) -> dict:
         elif col == 'cgpa':
             payload[col] = _safe_dec(row.get(col))
         else:
-            payload[col] = _clean_str(row.get(col), _COL_MAX.get(col))
+            payload[col] = _clean_cell(col, row.get(col), _COL_MAX.get(col))
     payload['source_file'] = payload.get('source_file')  # may be set by caller
     return payload
 
@@ -549,7 +624,7 @@ def _upsert_student(cur, usn: str, row: dict, source_filename: str = '',
             elif col == 'cgpa':
                 v = _safe_dec(row.get(col))
             else:
-                v = _clean_str(row.get(col), _COL_MAX.get(col))
+                v = _clean_cell(col, row.get(col), _COL_MAX.get(col))
             if v is None:
                 continue
 
@@ -627,7 +702,7 @@ def _upsert_student(cur, usn: str, row: dict, source_filename: str = '',
             elif col == 'cgpa':
                 v = _safe_dec(row.get(col))
             else:
-                v = _clean_str(row.get(col), _COL_MAX.get(col))
+                v = _clean_cell(col, row.get(col), _COL_MAX.get(col))
             if v is not None:
                 fields.append(f'`{col}`')
                 vals.append(v)
@@ -654,13 +729,39 @@ def _upsert_student(cur, usn: str, row: dict, source_filename: str = '',
         return 'added', conflicts
 
 
-def _upsert_fees(cur, usn: str, row: dict) -> int:
+def _fee_target(canon_col):
+    """(fee_type, year) for any fee heading the mapping recognised.
+
+    A sheet can name a fee line anything ('Fee Pending', 'Hostel Fee 2', the
+    four-year VTU/PD/IDP grid). Anything that still starts with the mapped fee
+    prefix describes a fee, and a fee that never reaches student_fees is
+    invisible to every fee query, the fee editor and the fee reports."""
+    if canon_col in _FEE_COLS:
+        return _FEE_COLS[canon_col]
+    m = _FEE_HEADING_RE.match(canon_col)
+    if not m:
+        return None
+    name = m.group(1).replace('_', ' ').strip().upper()
+    if not name:
+        return None
+    return (name, int(m.group(2)) if m.group(2) else 0)
+
+
+def _upsert_fees(cur, usn: str, row: dict, problems: list | None = None) -> int:
     """
     Parse all fee columns from a mapped row and upsert into student_fees.
     Returns the number of fee rows written.
     """
     written = 0
-    for canon_col, (fee_type, year) in _FEE_COLS.items():
+    cols = list(_FEE_COLS) + [
+        k for k in row
+        if isinstance(k, str) and k.startswith('fee_') and k not in _FEE_COLS
+    ]
+    for canon_col in cols:
+        fee_target = _fee_target(canon_col)
+        if not fee_target:
+            continue
+        fee_type, year = fee_target
         raw_val = row.get(canon_col)
         if _is_empty(raw_val):
             continue
@@ -684,8 +785,11 @@ def _upsert_fees(cur, usn: str, row: dict) -> int:
                 (usn, fee_type, year, status_val, amount_val)
             )
             written += 1
-        except Exception:
-            pass
+        except Exception as exc:
+            # One unreadable fee cell must not abort the whole import, but it
+            # must not vanish either: the caller reports what was not stored.
+            if problems is not None:
+                problems.append(f"{usn}: fee {fee_type}/{year} not stored ({exc})")
     return written
 
 
@@ -724,7 +828,8 @@ def _extract_backlog_text(row: dict):
     return None
 
 
-def _upsert_backlogs(cur, usn: str, raw_backlog_text: str) -> int:
+def _upsert_backlogs(cur, usn: str, raw_backlog_text: str,
+                    problems: list | None = None) -> int:
     """
     Parse backlog raw text and upsert into student_backlogs.
     Handles the messy real-world form values:
@@ -743,18 +848,35 @@ def _upsert_backlogs(cur, usn: str, raw_backlog_text: str) -> int:
 
     def _insert(subject, semester=None, year_str=None):
         nonlocal written
+        subject = str(subject)[:200]
         try:
+            # student_backlogs has no unique key over (usn, subject, semester),
+            # so ON DUPLICATE KEY could never fire: re-importing the same sheet
+            # added a second copy of every arrears row, and a student who failed
+            # one paper started showing two or three.
             cur.execute(
-                """INSERT INTO student_backlogs (usn, subject, semester, year, raw_text)
-                   VALUES (%s, %s, %s, %s, %s)
-                   ON DUPLICATE KEY UPDATE
-                       year=COALESCE(VALUES(year), year),
-                       raw_text=VALUES(raw_text)""",
-                (usn, str(subject)[:200], semester, year_str, cleaned[:1000])
-            )
+                "SELECT id FROM student_backlogs "
+                "WHERE usn=%s AND subject=%s AND ((%s IS NULL AND semester IS NULL) "
+                "OR semester=%s) LIMIT 1", (usn, subject, semester, semester))
+            found = cur.fetchone()
+            found_id = found["id"] if isinstance(found, dict) else (found[0] if found else None)
+            if found_id is not None:
+                cur.execute(
+                    "UPDATE student_backlogs SET year=COALESCE(%s, year), "
+                    "raw_text=%s, updated_at=NOW() WHERE id=%s",
+                    (year_str, cleaned[:1000], found_id))
+            else:
+                cur.execute(
+                    """INSERT INTO student_backlogs (usn, subject, semester, year, raw_text)
+                       VALUES (%s, %s, %s, %s, %s)""",
+                    (usn, subject, semester, year_str, cleaned[:1000])
+                )
             written += 1
-        except Exception:
-            pass
+        except Exception as exc:
+            # as with fees: a single unreadable arrears row must not abort the
+            # import, and it must not disappear without a trace either
+            if problems is not None:
+                problems.append(f"{usn}: backlog {subject!r} not stored ({exc})")
 
     written = 0
     # Bare integer (optionally "3.0") = a count of backlogs, subjects unspecified.
@@ -834,7 +956,7 @@ async def upload_file(file: UploadFile = File(...), current_user: dict = Depends
         raise HTTPException(422, f"Unsupported file type: .{ext}")
     with db_conn() as conn:
         cur = conn.cursor(dictionary=True)
-        reconciled = _reconcile_trashed_file_records(cur)
+        reconciled = _reconcile_trashed_file_records(cur, conn, current_user["username"])
         purged = _purge_expired_trash(cur)
         reconciled = _reconcile_orphaned_source_records(
             cur, purged, current_user["username"], conn) or reconciled
@@ -888,6 +1010,14 @@ def update_database(filename: str, current_user: dict = Depends(require_roles("S
     total_parsed = parsed["row_count"]
 
     if not mapped_recs:
+        # Every refusal at this door is recorded, whichever guard rejects it:
+        # staff must be able to see that a file was tried and why it never landed.
+        write_audit_log(action="UPLOAD_NO_DATA_ROWS", username=current_user["username"],
+                        role=current_user["role"], target_table="uploaded_files",
+                        target_id=filename,
+                        summary=f"Rejected {filename}: no data rows found "
+                                f"(header-only, blank rows, or an unreadable layout)",
+                        success=False, error_info="No data rows found in the file.")
         raise HTTPException(422, "No data rows found in the file.")
         
     all_keys = set()
@@ -925,9 +1055,9 @@ def update_database(filename: str, current_user: dict = Depends(require_roles("S
     provisional_usns = set(provisional_map)
 
     # ── Phase 2: Validate every mapped row (no DB yet) ────────────────────────
-    # Academic-only files may omit names, but only when their USN already
-    # exists.  This preserves personal data while allowing a later SGPA file
-    # to merge into the same student record.
+    # A row whose USN is already on file is a supplement, not a new admission:
+    # the identity is stored, so the sheet may carry only what it wants to add
+    # (this semester's SGPA, a phone number, a blood group) without a name.
     existing_usns: set[str] = set()
     candidate_usns = sorted({
         str(row.get('usn')).strip()
@@ -948,7 +1078,7 @@ def update_database(filename: str, current_user: dict = Depends(require_roles("S
     val_result = {'valid': mapped_recs, 'invalid': [], 'errors': []}
     if parsed.get("file_type") not in ("pdf", "txt", "image"):
         val_result = validate_mapped_rows(
-            mapped_recs, allow_academic_only_usns=existing_usns
+            mapped_recs, known_usns=existing_usns
         )
 
     sanitized_rows = []
@@ -1107,6 +1237,7 @@ def update_database(filename: str, current_user: dict = Depends(require_roles("S
     chunk_size = settings.MAX_UPLOAD_ROWS_PER_CHUNK
     usn_results: dict[str, str] = {}  # usn → NEW/UPDATED/UNCHANGED
     all_conflicts: list[dict] = []
+    child_problems: list[str] = []
     import_id: int = 0
 
     try:
@@ -1118,7 +1249,8 @@ def update_database(filename: str, current_user: dict = Depends(require_roles("S
                 if affected_usns:
                     from routes_undo import create_undo_snapshot
                     undo_token = create_undo_snapshot(
-                        "UPLOAD", affected_usns, current_user["username"], f"Bulk upload: {filename}", conn=conn
+                        "UPLOAD", affected_usns, current_user["username"],
+                        f"Bulk upload: {filename}", conn=conn, filename=filename
                     )
                 # Get the import_id from uploaded_files for provenance
                 cur.execute("SELECT id FROM uploaded_files WHERE filename=%s", (filename,))
@@ -1179,11 +1311,11 @@ def update_database(filename: str, current_user: dict = Depends(require_roles("S
                         continue
                     raw_row = item['row']
                     # Fees
-                    _upsert_fees(cur, usn, raw_row)
+                    _upsert_fees(cur, usn, raw_row, child_problems)
                     # Backlogs — stored in backlogs text column AND backlogs table
                     raw_backlog = _extract_backlog_text(raw_row)
                     if not _is_empty(raw_backlog):
-                        _upsert_backlogs(cur, usn, str(raw_backlog))
+                        _upsert_backlogs(cur, usn, str(raw_backlog), child_problems)
 
                 _clear_cache(conn)
                 cur.execute(
@@ -1254,6 +1386,9 @@ def update_database(filename: str, current_user: dict = Depends(require_roles("S
     )
     if not reconciled:
         msg += f" [Accounting: {accounted}/{total_parsed} rows]"
+    if child_problems:
+        msg += (f" {len(child_problems)} fee/backlog row(s) could not be stored "
+                f"and are listed in child_record_problems.")
     if provisional_map:
         msg += (f" {len(provisional_map)} name-only row(s) were given temporary USNs "
                 f"from batch {('20' + _batch_year_from_filename(filename)) if _batch_year_from_filename(filename) else '?'} "
@@ -1335,6 +1470,7 @@ def update_database(filename: str, current_user: dict = Depends(require_roles("S
         },
         "conflicts": all_conflicts[:50],
         "conflicts_count": len(all_conflicts),
+        "child_record_problems": child_problems[:50],
         "provisional_usns": provisional_detail,
         "provisional_count": len(provisional_map),
     }
@@ -1382,7 +1518,7 @@ def list_files(current_user: dict = Depends(get_current_user)):
 def list_trashed_files(current_user: dict = Depends(require_roles("Admin"))):
     with db_conn() as conn:
         cur = conn.cursor(dictionary=True)
-        data_reconciled = _reconcile_trashed_file_records(cur)
+        data_reconciled = _reconcile_trashed_file_records(cur, conn, current_user["username"])
         purged = _purge_expired_trash(cur)
         data_reconciled = _reconcile_orphaned_source_records(
             cur, purged, current_user["username"], conn) or data_reconciled
@@ -1614,6 +1750,8 @@ def delete_file(filename: str, current_user: dict = Depends(require_roles("Admin
                     if (usn in record_owned_usns or source_file_matches) and not has_other_source:
                         cur.execute("DELETE FROM marks WHERE usn=%s", (usn,))
                         deleted_marks += cur.rowcount
+                        cur.execute("DELETE FROM student_fees WHERE usn=%s", (usn,))
+                        cur.execute("DELETE FROM student_backlogs WHERE usn=%s", (usn,))
                         cur.execute("DELETE FROM students WHERE usn=%s", (usn,))
                         if cur.rowcount:
                             deleted_usns.add(usn)
@@ -1637,7 +1775,10 @@ def delete_file(filename: str, current_user: dict = Depends(require_roles("Admin
                 _SAFE_STUDENT_COLS = set(STUDENT_COLS)
                 # Identity columns are NOT NULL in the schema; nulling them would
                 # abort the whole deletion transaction. Always preserve them.
-                _PROTECTED_COLS = {'usn', 'student_id'}
+                # `name` is preserved for a second reason: a row that survives
+                # because another file still owns a field must stay findable, so
+                # the file that named it cannot leave it as a blank shell.
+                _PROTECTED_COLS = {'usn', 'student_id', 'name'}
 
                 _MARK_PROV_RE = re.compile(r'^mark_sem_(\d+)_sgpa$')
 
@@ -1688,17 +1829,15 @@ def delete_file(filename: str, current_user: dict = Depends(require_roles("Admin
                         )
                         preserved_fields.append({'usn': usn, 'field': field})
                     elif field in _PROTECTED_COLS:
-                        # No other source, but the column cannot be NULL — keep the
-                        # existing identity value rather than failing the deletion.
+                        # The column cannot be blanked: it is either NOT NULL or the
+                        # identity of a row this deletion deliberately keeps.
                         preserved_fields.append({'usn': usn, 'field': field})
                     else:
-                        # Remove the deleted file's value, including a name on
-                        # a student row that is still owned by another source.
+                        # Remove the deleted file's value.
                         safe_col = field  # Already validated against SAFE_STUDENT_COLS
-                        cleared_value = '' if field == 'name' else None
                         cur.execute(
-                            f"UPDATE students SET `{safe_col}`=%s WHERE usn=%s",
-                            (cleared_value, usn),
+                            f"UPDATE students SET `{safe_col}`=NULL WHERE usn=%s",
+                            (usn,),
                         )
                         nulled_fields.append({
                             'usn': usn, 'field': field, 'old_value': old_val

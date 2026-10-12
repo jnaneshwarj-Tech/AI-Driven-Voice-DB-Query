@@ -938,30 +938,27 @@ def sanitize_row_fields(row: dict) -> tuple[dict, dict[str, str]]:
 
 
 def validate_mapped_rows(
-    mapped_records: list[dict], *, allow_academic_only_usns: set[str] | None = None
+    mapped_records: list[dict], *, known_usns: set[str] | None = None
 ) -> dict:
     """
     Validate identity-critical fields at the row level while treating non-critical
     field errors as per-field issues that do not invalidate the whole student.
+
+    `known_usns` are USNs already present in the students table. Such a row is a
+    supplement, not a new admission: the name is on file, so any column the sheet
+    carries (phone, blood group, one semester's SGPA, …) may be merged without it.
     """
     valid, invalid, errors = [], [], []
-    allow_academic_only_usns = allow_academic_only_usns or set()
+    known_usns = {str(u).strip().casefold() for u in (known_usns or set())}
 
     for idx, row in enumerate(mapped_records, start=1):
         cleaned_row, field_issues = sanitize_row_fields(row)
         row_errors = []
         available_cols = list(row.keys())
         row_usn = '' if _is_empty(cleaned_row.get('usn')) else str(cleaned_row.get('usn')).strip()
-        has_academic_data = (
-            not _is_empty(cleaned_row.get('sgpa'))
-            or any(
-                re.fullmatch(r'sem_\d+_(sgpa|cgpa)', str(field)) and not _is_empty(value)
-                for field, value in cleaned_row.items()
-            )
-        )
 
         for field in REQUIRED_FIELDS:
-            if field == 'name' and row_usn in allow_academic_only_usns and has_academic_data:
+            if field == 'name' and row_usn.casefold() in known_usns:
                 continue
             val = cleaned_row.get(field)
             if _is_empty(val):

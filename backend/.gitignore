@@ -2,20 +2,32 @@
 .env
 *.env
 
-# Python virtual environment
+# Python Virtual Environments & Cache
 .venv/
 venv/
-
-# Python cache
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
+.pytest_cache/
 
-# Node
-node_modules/
+# Logs
+*.log
+_*.log
 
-# Build files
-dist/
-build/
+# Backups
+backups/*.sql
+*.sql.gz
+
+# Uploads
+uploads/*
+!uploads/.gitkeep
+
+# Temp / QA Artifacts
+*.json.bak
+_*.json
+*_results.json
 
 # IDE
 .vscode/
+.idea/
+.trae/

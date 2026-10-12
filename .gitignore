@@ -1,29 +1,52 @@
-node_modules/
-dist/
-build/
-*.log
-.env
 # Environment variables
 .env
 *.env
 
-# Python
+# Dependencies & Package Managers
+node_modules/
+frontend/node_modules/
+package-lock.json.backup
+
+# Production Builds
+dist/
+build/
+frontend/dist/
+
+# Python & Virtual Environments
 __pycache__/
 *.py[cod]
 *.pyo
 .venv/
 venv/
+.pytest_cache/
+*.egg-info/
 
-# Node
-node_modules/
+# Application Logs & Diagnostics
+*.log
+backend/*.log
+_*.log
 
-# Build
-dist/
-build/
+# Database Backups (Keep folder structure via .gitkeep, ignore dump files)
+backend/backups/*.sql
+backups/*.sql
 
-# VS Code
+# Uploads & User Files (Keep folder structure via .gitkeep)
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# AI / Test Caches & Results
+_qa_checkpoints/
+*.json.bak
+_*.json
+*_results.json
+
+# IDE & Editor Files
 .vscode/
-# Python cache
-__pycache__/
-*.py[cod]
+.idea/
+.trae/
+*.swp
+*.swo
 
+# Operating System Files
+.DS_Store
+Thumbs.db

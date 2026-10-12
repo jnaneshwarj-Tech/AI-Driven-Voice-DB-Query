@@ -92,19 +92,86 @@ def _inflate_stream(blob: bytes) -> bytes:
         return blob
 
 
+def _pdf_tounicode(raw: bytes) -> dict:
+    """Map the subset font codes a PDF writes back to real characters.
+
+    A subsetting TrueType font (the only way to draw Kannada in a PDF) stores
+    glyph codes, not text, in its content streams; the embedded ToUnicode CMap
+    is the document's own statement of which character each code is.
+    """
+    cmap: dict[bytes, str] = {}
+    for match in re.finditer(rb"stream\r?\n(.*?)endstream", raw, re.S):
+        blob = _inflate_stream(match.group(1))
+        if b"begincmap" not in blob:
+            continue
+        for section in re.findall(rb"beginbfchar(.*?)endbfchar", blob, re.S):
+            for src, dst in re.findall(rb"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>", section):
+                if len(src) != 2:
+                    continue  # multi-byte codes: not produced by reportlab's subsets
+                chars = "".join(chr(int(dst[i:i + 4], 16))
+                                for i in range(0, len(dst) - (len(dst) % 4), 4))
+                if chars:
+                    cmap[bytes.fromhex(src.decode("ascii"))] = chars
+    return cmap
+
+
+_PDF_ESCAPES = {b"n": 10, b"r": 13, b"t": 9, b"b": 8, b"f": 12,
+                b"(": 40, b")": 41, b"\\": 92}
+
+
+def _unescape_pdf_string(data: bytes) -> bytes:
+    """Resolve a PDF literal string's escapes, including octal ``\\001`` codes —
+    which is exactly how a subset font writes a Kannada name."""
+    out = bytearray()
+    i = 0
+    while i < len(data):
+        ch = data[i:i + 1]
+        if ch != b"\\":
+            out += ch
+            i += 1
+            continue
+        nxt = data[i + 1:i + 2]
+        if nxt in b"01234567":
+            j, octal = i + 1, b""
+            while j < len(data) and len(octal) < 3 and data[j:j + 1] in b"01234567":
+                octal += data[j:j + 1]
+                j += 1
+            out.append(int(octal, 8) & 0xFF)
+            i = j
+            continue
+        if nxt in _PDF_ESCAPES:
+            out.append(_PDF_ESCAPES[nxt])
+            i += 2
+            continue
+        if nxt in (b"\n", b"\r"):  # line continuation: contributes nothing
+            i += 2
+            continue
+        out += nxt
+        i += 2
+    return bytes(out)
+
+
 def _pdf_text(raw: bytes) -> str:
-    """Extract readable text tokens from a PDF by decoding every content
-    stream and collecting the show-text operators."""
+    """Extract the text a PDF actually draws.
+
+    Decodes every content stream, resolves literal-string escapes and maps
+    subset-font codes through the embedded ToUnicode CMap, so non-Latin names
+    come back as the characters they are rather than as code junk.
+    """
+    cmap = _pdf_tounicode(raw)
     chunks = []
     for match in re.finditer(rb"stream\r?\n(.*?)endstream", raw, re.S):
         blob = _inflate_stream(match.group(1))
-        for tj in re.finditer(rb"\((.*?)\)\s*Tj", blob, re.S):
-            chunks.append(tj.group(1))
+        if b"begincmap" in blob:
+            continue
+        literals = [m.group(1) for m in re.finditer(rb"\((.*?)\)\s*Tj", blob, re.S)]
         for arr in re.finditer(rb"\[(.*?)\]\s*TJ", blob, re.S):
-            for tj in re.finditer(rb"\((.*?)\)", arr.group(1), re.S):
-                chunks.append(tj.group(1))
-    text = b" ".join(chunks).decode("latin-1", "ignore")
-    return re.sub(r"\\(.)", r"\1", text)  # unescape PDF string escapes
+            literals += [m.group(1) for m in re.finditer(rb"\((.*?)\)", arr.group(1), re.S)]
+        for lit in literals:
+            data = _unescape_pdf_string(lit)
+            chunks.append("".join(cmap.get(data[i:i + 1], chr(b))
+                                  for i, b in enumerate(data)))
+    return " ".join(chunks)
 
 
 def _xlsx_text(raw: bytes) -> str:

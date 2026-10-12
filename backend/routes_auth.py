@@ -82,12 +82,41 @@ def _generate_otp() -> str:
 
 # ── Existing auth routes (unchanged) ──────────────────────────────────────────
 
+# Brute-force guard. Counted per username rather than per source address because
+# every clerk in the office shares one college IP: locking the address would let
+# one tired typist lock the whole staff room out.
+LOGIN_MAX_FAILURES = 10
+LOGIN_WINDOW_MINUTES = 15
+
+
 @router.post("/login", response_model=TokenResponse)
 def login(req: LoginRequest, request: Request = None):
     ip = request.client.host if request and request.client else ""
 
     with db_conn() as conn:
         cur = conn.cursor(dictionary=True)
+        cur.execute(
+            "SELECT COUNT(*) c, MAX(created_at) last FROM audit_log "
+            "WHERE action='LOGIN_FAILED' AND username=%s "
+            "AND created_at > DATE_SUB(NOW(), INTERVAL %s MINUTE)",
+            (req.username, LOGIN_WINDOW_MINUTES),
+        )
+        throttled = cur.fetchone() or {}
+        if int(throttled.get("c") or 0) >= LOGIN_MAX_FAILURES:
+            last = throttled.get("last")
+            wait = LOGIN_WINDOW_MINUTES * 60
+            if isinstance(last, datetime):
+                wait = int(last.timestamp() + LOGIN_WINDOW_MINUTES * 60
+                           - datetime.now().timestamp())
+            wait = max(60, wait)
+            cur.close()
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Too many incorrect attempts. Try again in "
+                       f"{max(1, round(wait / 60))} minute(s).",
+                headers={"Retry-After": str(wait)},
+            )
+
         cur.execute("SELECT * FROM users WHERE username=%s OR email=%s", (req.username, req.username))
         user = cur.fetchone()
         cur.close()

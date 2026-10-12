@@ -109,6 +109,23 @@ class TestSprint1DatabaseReliability(unittest.TestCase):
         self.assertTrue(valid, f"Backup file verification failed: {msg}")
         print(f" [PASS] Test 3: Backup creation & verification passed ({result['backup_name']}, {result['size_bytes']:,} bytes).")
 
+        # Every manual backup the retention policy protects from pruning
+        # (routes_backup._apply_retention_policy only ages out auto_daily and
+        # auto_weekly), so a test that leaves one behind can never clean itself
+        # up. One real mysqldump per suite run is ~10 MB and 126 of them had
+        # already reached 8.4 GB on disk. Assertions above are done; remove the
+        # file and the db_backups row so the register does not advertise a dump
+        # that no longer exists.
+        with db_conn() as conn:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM db_backups WHERE id=%s", (result["backup_id"],))
+            conn.commit()
+            cur.close()
+        try:
+            os.remove(backup_file)
+        except OSError:
+            pass
+
     def test_04_transaction_rollback_no_partial_data(self):
         """
         NO DATA LOSS / NO PARTIAL IMPORT TEST:
