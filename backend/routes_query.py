@@ -4283,11 +4283,16 @@ def _filter_by_intent(rows: list[dict], intent: str, natural_query: str | None =
             (r'\baadhar\b', 'aadhar_no'),
             (r'\bcurrent\s+sem(?:ester)?\b', 'current_sem'),
         ):
-            if re.search(pattern, natural_query, re.I):
+            match = re.search(pattern, natural_query, re.I)
+            if column == 'name' and match and re.search(
+                r"\b(?:father|mother|dad|mom)(?:['’]s)?\s+$",
+                natural_query[:match.start()],
+                re.I,
+            ):
+                continue
+            if match:
                 requested.add(column)
         if requested:
-            requested.update({'usn', 'name', 'dynamic_data'})
-            requested = _keep_with_contact(requested)
             return [{k: v for k, v in row.items() if k in requested} for row in rows]
 
     return rows
