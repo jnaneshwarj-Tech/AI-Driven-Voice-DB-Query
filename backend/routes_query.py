@@ -4293,7 +4293,6 @@ def _filter_by_intent(rows: list[dict], intent: str, natural_query: str | None =
             if match:
                 requested.add(column)
         if requested:
-            requested.update({'usn', 'name'})
             return [{k: v for k, v in row.items() if k in requested} for row in rows]
 
     return rows
