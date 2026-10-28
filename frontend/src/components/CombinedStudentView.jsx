@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import GpaTable from './GpaTable';
 import api from '../services/api';
 import { EditFieldModal, EditFeesModal } from './StudentEditor';
+import { useI18n } from '../context/LanguageContext';
 import {
   User, Phone, MapPin, Mail, Droplet, Calendar,
   GraduationCap, BookOpen, Shield, AlertCircle, ChevronRight,
@@ -31,38 +32,64 @@ const isSkip = (k) =>
   isAcademicKey(k) || k.startsWith('phone_') || k.startsWith('mobile_');
 
 // ── Field label map ───────────────────────────────────────────────────────────
+// Keys are DB column names and are load-bearing (prettyValue/InfoRow match on
+// them) — never renamed. Values are i18n keys for the label shown beside the
+// value. Columns not listed here fall through to their raw field name, which is
+// an API field name and therefore deliberately not translated.
 const FIELD_LABELS = {
-  dob: 'Date of Birth',
-  blood_group: 'Blood Group',
-  aadhar_no: 'Aadhar No',
-  father_name: "Father's Name",
-  mother_name: "Mother's Name",
-  father_occupation: "Father's Occupation",
-  mother_occupation: "Mother's Occupation",
-  parents_phone: 'Parents Phone',
-  emergency_contact_number: 'Emergency Contact',
-  permanent_address: 'Permanent Address',
-  current_address: 'Current Address',
-  year_of_joining: 'Joining Year',
-  admission_year: 'Admission Year',
-  year_and_branch: 'Year & Branch',
-  current_sem: 'Current Semester',
-  area_type: 'Area Type',
-  hk_status: 'HK / Non-HK Status',
-  quota: 'Admission Quota',
-  distance_from_college: 'Distance from College',
-  kannada_medium: 'Kannada Medium',
-  physically_handicapped: 'Physically Handicapped',
-  snq_quota: 'SNQ Quota',
-  pin_code: 'PIN Code',
-  post_office: 'Post Office',
-  backlogs: 'Backlogs',
+  dob: 'student.field.dob',
+  blood_group: 'student.field.bloodGroup',
+  aadhar_no: 'student.field.aadharNo',
+  father_name: 'student.field.fatherName',
+  mother_name: 'student.field.motherName',
+  father_occupation: 'student.field.fatherOccupation',
+  mother_occupation: 'student.field.motherOccupation',
+  parents_phone: 'student.field.parentsPhone',
+  emergency_contact_number: 'student.field.emergencyContact',
+  permanent_address: 'student.field.permanentAddress',
+  current_address: 'student.field.currentAddress',
+  year_of_joining: 'student.field.joiningYear',
+  admission_year: 'student.field.admissionYear',
+  year_and_branch: 'student.field.yearAndBranch',
+  current_sem: 'student.field.currentSem',
+  area_type: 'student.field.areaType',
+  hk_status: 'student.field.hkStatus',
+  quota: 'student.field.quota',
+  distance_from_college: 'student.field.distanceFromCollege',
+  kannada_medium: 'student.field.kannadaMedium',
+  physically_handicapped: 'student.field.physicallyHandicapped',
+  snq_quota: 'student.field.snqQuota',
+  pin_code: 'student.field.pinCode',
+  post_office: 'student.field.postOffice',
+  backlogs: 'student.field.backlogs',
+  // English values below are byte-identical to the pretty-case fallback that
+  // used to render them, so adding them only brings Kannada coverage.
+  gender: 'student.field.gender',
+  status: 'common.status',
+  email: 'student.field.email',
+  phone: 'student.field.phone',
+  guardian_name: 'student.field.guardianName',
+  religion: 'student.field.religion',
+  caste: 'student.field.caste',
+  sub_caste: 'student.field.subCaste',
+  category: 'student.field.category',
+  village: 'student.field.village',
+  area: 'student.field.area',
+  region: 'student.field.region',
+  taluk: 'student.field.taluk',
+  district: 'student.field.district',
+  state: 'student.field.state',
+  address: 'student.field.address',
 };
 
-function prettyLabel(key) {
-  return FIELD_LABELS[key] || key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+function prettyLabel(key, t) {
+  const labelKey = FIELD_LABELS[key];
+  if (labelKey) return t(labelKey);
+  return key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
+// ── Value handling: untouched. Statuses, names, USNs and addresses are
+//    rendered exactly as the database returned them. ────────────────────────
 function prettyValue(key, val) {
   if (val === null || val === undefined || val === '' || val === '—') return null;
   const s = String(val).trim();
@@ -87,30 +114,33 @@ function hasVal(v) {
 
 // ── Graduation badge ──────────────────────────────────────────────────────────
 function GradBadge({ status }) {
+  const { t } = useI18n();
   if (!status) return null;
   const isGrad = String(status).toUpperCase() === 'GRADUATED';
   return (
-    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold ${
-      isGrad
-        ? 'bg-green-100 text-green-700 border border-green-200'
-        : 'bg-blue-100 text-blue-700 border border-blue-200'
-    }`}>
-      {isGrad ? <GraduationCap className="w-3 h-3" /> : <BookOpen className="w-3 h-3" />}
-      {isGrad ? 'GRADUATED' : 'ACTIVE'}
+    <span className={`badge gap-1 ${isGrad ? 'badge-ok' : 'badge-info'}`}>
+      {isGrad ? <GraduationCap className="h-3 w-3" /> : <BookOpen className="h-3 w-3" />}
+      {isGrad ? t('student.graduated') : t('student.active')}
     </span>
   );
 }
 
 // ── InfoRow — renders nothing when value is null/empty ────────────────────────
-function InfoRow({ label, value, icon }) {
-  const v = prettyValue(label.toLowerCase().replace(/ /g, '_'), value);
+function InfoRow({ label, value, icon, field }) {
+  // `field` is the DB column; older callers derived it from the English label,
+  // which no longer works once the label is Kannada. The fallback is kept for
+  // any caller that still passes only a label.
+  const key = field != null ? field : label.toLowerCase().replace(/ /g, '_');
+  const v = prettyValue(key, value);
   if (!v) return null;
   return (
-    <div className="flex items-start justify-between border-b border-slate-50 pb-1.5 gap-2">
-      <span className="text-slate-500 flex items-center gap-1.5 flex-shrink-0 text-xs whitespace-nowrap">
+    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 border-b border-line/70 pb-1.5 last:border-b-0">
+      <span className="t-label flex flex-wrap items-center gap-1.5 text-ink-mute">
         {icon}{label}
       </span>
-      <span className="font-medium text-slate-800 text-xs text-right break-words max-w-[62%]">{v}</span>
+      <span className="t-body max-w-full break-words font-medium text-ink tabular-nums sm:max-w-[62%] sm:text-right">
+        {v}
+      </span>
     </div>
   );
 }
@@ -120,38 +150,50 @@ function Section({ title, icon, children, className = '' }) {
   const childArr = React.Children.toArray(children).filter(Boolean);
   if (!childArr.length) return null;
   return (
-    <div className={`space-y-2 ${className}`}>
-      <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+    <section className={`sunken p-3 ${className}`}>
+      <h4 className="t-label mb-2 flex flex-wrap items-center gap-1.5 font-semibold uppercase tracking-wide text-ink-soft">
         {icon}{title}
-      </h3>
+      </h4>
       <div className="flex flex-col gap-1.5">{children}</div>
-    </div>
+    </section>
   );
 }
 
 // ── Fee status badge ──────────────────────────────────────────────────────────
+// Detection rules are unchanged; an unrecognised status string from the DB is
+// printed exactly as stored rather than mapped to a tidier word.
 function FeeBadge({ status }) {
-  if (!status) return <span className="text-slate-300 text-xs">—</span>;
+  const { t } = useI18n();
+  if (!status) return <span className="text-xs text-ink-faint">—</span>;
   const s = String(status).toLowerCase();
   const isPaid = s.includes('paid') && !s.includes('not') && !s.includes('partial');
   const isNotPaid = s.includes('not paid');
   const isPartial = s.includes('partial');
-  const cls = isPaid
-    ? 'bg-green-100 text-green-700 border-green-200'
+  const tone = isPaid
+    ? 'badge-ok'
     : isNotPaid
-    ? 'bg-red-100 text-red-700 border-red-200'
+    ? 'badge-err'
     : isPartial
-    ? 'bg-amber-100 text-amber-700 border-amber-200'
-    : 'bg-slate-100 text-slate-600 border-slate-200';
+    ? 'badge-warn'
+    : 'badge-quiet';
   return (
-    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold border ${cls}`}>
-      {isPaid ? '✓ Paid' : isNotPaid ? '✗ Not Paid' : isPartial ? '~ Partial' : status}
+    <span className={`badge max-w-full whitespace-normal break-words text-center ${tone}`}>
+      {isPaid ? t('student.feePaid') : isNotPaid ? t('student.feeNotPaid') : isPartial ? t('student.feePartial') : status}
     </span>
   );
 }
 
 // ── Fees sub-component — fetches from student_fees API ───────────────────────
+const FEE_LABELS = {
+  VTU: 'student.feeVtu',
+  PD: 'student.feePd',
+  IDP: 'student.feeIdp',
+  TUITION_PAID: 'student.feeTuitionPaid',
+  TUITION_REMAINING: 'student.feeTuitionRemaining',
+};
+
 function FeesSection({ usn, nonce = 0 }) {
+  const { t } = useI18n();
   const [fees, setFees] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -163,7 +205,7 @@ function FeesSection({ usn, nonce = 0 }) {
       .finally(() => setLoading(false));
   }, [usn, nonce]);
 
-  if (loading) return <p className="text-xs text-slate-400 italic">Loading fees…</p>;
+  if (loading) return <p className="t-support italic text-ink-mute">{t('student.loadingFees')}</p>;
   if (!fees?.length) return null;
 
   // Group by fee_type
@@ -174,34 +216,28 @@ function FeesSection({ usn, nonce = 0 }) {
     grouped[key].push(f);
   }
 
-  const FEE_LABELS = {
-    VTU: 'VTU Fees',
-    PD: 'PD Fees',
-    IDP: 'IDP / Tuition Fees',
-    TUITION_PAID: 'Tuition Fees Paid',
-    TUITION_REMAINING: 'Tuition Remaining',
-  };
-
   return (
     <div className="space-y-3">
       {Object.entries(grouped).map(([feeType, rows]) => (
         <div key={feeType}>
-          <p className="text-[10px] font-bold text-slate-500 uppercase mb-1.5">
-            {FEE_LABELS[feeType] || feeType}
+          <p className="t-label mb-1.5 flex flex-wrap items-center gap-1.5 font-semibold uppercase tracking-wide text-ink-soft">
+            {FEE_LABELS[feeType] ? t(FEE_LABELS[feeType]) : feeType}
           </p>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {rows
               .sort((a, b) => (a.year || 0) - (b.year || 0))
               .map((f, i) => (
-                <div key={i} className="bg-slate-50 rounded-lg p-2 border border-slate-100 text-center">
+                <div key={i} className="sunken flex flex-col items-center gap-1 p-2 text-center">
                   {f.year > 0 && (
-                    <p className="text-[9px] text-slate-400 uppercase mb-1">Year {f.year}</p>
+                    <p className="text-xs uppercase text-ink-mute tabular-nums">
+                      {t('student.year', { y: f.year })}
+                    </p>
                   )}
                   <FeeBadge status={f.status} />
                   {f.amount_paid && !['paid', 'not paid', 'partially paid'].includes(
                     String(f.amount_paid).toLowerCase()
                   ) && (
-                    <p className="text-[9px] text-slate-500 mt-0.5">₹ {f.amount_paid}</p>
+                    <p className="text-xs text-ink-mute tabular-nums">₹ {f.amount_paid}</p>
                   )}
                 </div>
               ))}
@@ -214,6 +250,7 @@ function FeesSection({ usn, nonce = 0 }) {
 
 // ── Backlogs sub-component — fetches from student_backlogs API ────────────────
 function BacklogsSection({ usn, rawText }) {
+  const { t } = useI18n();
   const [backlogs, setBacklogs] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -225,7 +262,7 @@ function BacklogsSection({ usn, rawText }) {
       .finally(() => setLoading(false));
   }, [usn]);
 
-  if (loading) return <p className="text-xs text-slate-400 italic">Loading backlogs…</p>;
+  if (loading) return <p className="t-support italic text-ink-mute">{t('student.loadingBacklogs')}</p>;
 
   // If API returned structured data, use it; otherwise fall back to raw text
   const hasStructured = backlogs?.length > 0;
@@ -236,8 +273,8 @@ function BacklogsSection({ usn, rawText }) {
 
   if (!hasStructured && !hasRaw) {
     return (
-      <div className="flex items-center gap-2 px-3 py-2 bg-green-50 rounded-lg border border-green-100">
-        <span className="text-green-600 text-xs font-semibold">✓ No backlogs</span>
+      <div className="flex flex-wrap items-center gap-2 rounded-md border border-ok/40 bg-ok-soft p-2.5">
+        <span className="t-table font-semibold text-ok">{t('student.noBacklogs')}</span>
       </div>
     );
   }
@@ -246,18 +283,20 @@ function BacklogsSection({ usn, rawText }) {
     return (
       <div className="space-y-1.5">
         {backlogs.map((b, i) => (
-          <div key={i} className="flex items-start gap-2 px-3 py-2 bg-amber-50 rounded-lg border border-amber-100">
-            <FileWarning className="w-3.5 h-3.5 text-amber-500 flex-shrink-0 mt-0.5" />
-            <div className="min-w-0">
-              <p className="text-xs font-semibold text-slate-800 truncate">{b.subject}</p>
+          <div key={i} className="flex flex-wrap items-start gap-2 rounded-md border border-warn/40 bg-warn-soft p-2.5">
+            <FileWarning className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-warn" aria-hidden="true" />
+            <div className="min-w-0 flex-1">
+              <p className="t-table break-words font-semibold text-ink">{b.subject}</p>
               {(b.semester || b.year) && (
-                <p className="text-[10px] text-slate-500">
-                  {b.semester ? `Sem ${b.semester}` : ''}{b.semester && b.year ? ' · ' : ''}{b.year || ''}
+                <p className="text-xs text-ink-mute tabular-nums">
+                  {b.semester ? `${t('student.semShort')} ${b.semester}` : ''}{b.semester && b.year ? ' · ' : ''}{b.year || ''}
                 </p>
               )}
             </div>
             {b.cleared === 1 && (
-              <span className="ml-auto text-[10px] text-green-600 font-semibold flex-shrink-0">Cleared</span>
+              <span className="ml-auto flex-shrink-0 text-xs font-semibold text-ok">
+                {t('student.cleared')}
+              </span>
             )}
           </div>
         ))}
@@ -265,24 +304,36 @@ function BacklogsSection({ usn, rawText }) {
     );
   }
 
-  // Fallback: raw text
+  // Fallback: raw text exactly as stored
   return (
-    <div className="px-3 py-2 bg-amber-50 rounded-lg border border-amber-100">
-      <p className="text-xs text-slate-700 whitespace-pre-wrap break-words">{String(rawText).trim()}</p>
+    <div className="sunken p-3">
+      <p className="t-body break-words whitespace-pre-wrap text-ink">{String(rawText).trim()}</p>
     </div>
   );
 }
 
 // ── Main Component ────────────────────────────────────────────────────────────
 export default function CombinedStudentView({ data, responseLanguage }) {
+  const { t } = useI18n();
   const [editor, setEditor] = useState(null); // {type:'field'|'fees', usn, name}
   const [nonce, setNonce] = useState(0); // bump to refetch live fee/backlog sections after a save
+  // Presentation only: the card whose save just landed is washed once in the
+  // accent colour so the eye can find it in a long result set.
+  const [flashUsn, setFlashUsn] = useState(null);
+  useEffect(() => {
+    if (!flashUsn) return undefined;
+    const id = setTimeout(() => setFlashUsn(null), 1800);
+    return () => clearTimeout(id);
+  }, [flashUsn]);
   const role = (typeof localStorage !== 'undefined' ? (localStorage.getItem('role') || '') : '').toLowerCase();
   const canEdit = role === 'staff' || role === 'admin';
   const isAdmin = role === 'admin';
 
   if (!data?.length) return null;
 
+  // `responseLanguage` is the language of the AI *answer* (Dashboard's own
+  // switch), not of the interface. It still drives the Kannada font so a
+  // Kannada answer stays legible when the chrome language is English.
   const isKannada = responseLanguage === 'kannada' || responseLanguage === 'mixed';
 
   // ── Group data rows by student USN ────────────────────────────────────────
@@ -356,57 +407,61 @@ export default function CombinedStudentView({ data, responseLanguage }) {
         const anyPersonal = Object.values(p).some(v => hasVal(v));
 
         return (
-          <div key={idx} className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
+          <div key={student.usn || idx} className={`card anim-fade-up overflow-hidden${flashUsn && flashUsn === student.usn ? ' row-flash' : ''}`}>
 
             {/* ── Student Header ───────────────────────────────────────────── */}
-            <div className="p-5 pb-4 bg-gradient-to-br from-blue-50 to-slate-50 border-b border-slate-100">
-              <div className="flex items-start gap-4">
-                <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 text-white flex items-center justify-center text-2xl font-bold shadow-md flex-shrink-0">
+            <div
+              lang={isKannada ? 'kn' : undefined}
+              className={`border-b border-line bg-gradient-to-br from-brand/[0.07] via-surface to-surface p-4 sm:p-5 ${isKannada ? 'font-kannada' : ''}`}
+            >
+              <div className="flex flex-wrap items-start gap-4">
+                <div className="flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand-mid to-brand text-2xl font-bold text-white shadow-md">
                   {(student.name || '?').charAt(0).toUpperCase()}
                 </div>
-                <div className="flex-1 min-w-0">
-                  <h2 className="text-lg font-bold text-slate-800">{student.name || '—'}</h2>
-                  <div className="flex flex-wrap items-center gap-2 mt-1">
+                <div className="min-w-0 flex-1">
+                  <h2 className="t-card break-words text-ink">{student.name || '—'}</h2>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-2">
                     {student.usn && (
-                      <span className="px-2.5 py-0.5 bg-slate-100 rounded-md border border-slate-200 font-mono text-xs font-semibold text-slate-700">
+                      <span className="badge badge-quiet font-mono text-xs font-semibold tabular-nums">
                         {student.usn}
                       </span>
                     )}
                     {grad.graduation_status && <GradBadge status={grad.graduation_status} />}
                     {grad.student_type && (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-purple-50 text-purple-700 border border-purple-100">
-                        <Shield className="w-3 h-3" />{grad.student_type}
+                      <span className="badge gap-1 badge-brand">
+                        <Shield className="h-3 w-3" aria-hidden="true" />
+                        <span className="max-w-full whitespace-normal break-words">{grad.student_type}</span>
                       </span>
                     )}
                     {p.hk_status && (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-orange-50 text-orange-700 border border-orange-100">
+                      <span className="badge badge-warn max-w-full whitespace-normal break-words">
                         {p.hk_status}
                       </span>
                     )}
                     {p.area_type && (
-                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border ${
-                        String(p.area_type).toUpperCase() === 'RURAL'
-                          ? 'bg-green-50 text-green-700 border-green-100'
-                          : 'bg-blue-50 text-blue-700 border-blue-100'
+                      <span className={`badge gap-1 ${
+                        String(p.area_type).toUpperCase() === 'RURAL' ? 'badge-ok' : 'badge-info'
                       }`}>
-                        <Leaf className="w-3 h-3" />
+                        <Leaf className="h-3 w-3" aria-hidden="true" />
                         {String(p.area_type).toUpperCase()}
                       </span>
                     )}
                   </div>
                 </div>
                 {canEdit && student.usn && (
-                  <div className="flex flex-col gap-1.5 flex-shrink-0">
+                  <div className="flex flex-shrink-0 flex-wrap gap-1.5">
                     <button
+                      type="button"
                       onClick={() => setEditor({ type: 'field', usn: student.usn, name: student.name })}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-semibold rounded-lg border border-blue-200 bg-white text-blue-700 hover:bg-blue-50 transition-colors">
-                      <Pencil className="w-3 h-3" />Edit details
+                      className="btn btn-sm btn-primary">
+                      <Pencil className="h-3.5 w-3.5" aria-hidden="true" />{t('student.editDetails')}
                     </button>
                     {isAdmin && (
                       <button
+                        type="button"
                         onClick={() => setEditor({ type: 'fees', usn: student.usn, name: student.name })}
-                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-semibold rounded-lg border border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-50 transition-colors">
-                        <IndianRupee className="w-3 h-3" />Edit fees
+                        className="btn btn-sm btn-ghost">
+                        <IndianRupee className="h-3.5 w-3.5 text-ok" aria-hidden="true" />{t('student.editFees')}
                       </button>
                     )}
                   </div>
@@ -416,151 +471,153 @@ export default function CombinedStudentView({ data, responseLanguage }) {
               {/* Academic chips */}
               <div className="mt-3 flex flex-wrap gap-2">
                 {am.branch && (
-                  <div className="flex items-center gap-1.5 text-xs text-slate-600 bg-white px-2.5 py-1 rounded-lg border border-slate-200">
-                    <BookOpen className="w-3 h-3 text-blue-500" />
-                    <span className="font-semibold">{am.branch}</span>
+                  <div className="inline-flex flex-wrap items-center gap-1.5 rounded-md border border-line bg-surface px-2.5 py-1 text-xs text-ink-soft">
+                    <BookOpen className="h-3.5 w-3.5 text-brand-fg" aria-hidden="true" />
+                    <span className="font-semibold text-ink">{am.branch}</span>
                   </div>
                 )}
                 {(am.division || am.section) && (
-                  <div className="flex items-center gap-1.5 text-xs text-slate-600 bg-white px-2.5 py-1 rounded-lg border border-slate-200">
-                    Section: <span className="font-semibold ml-1">{am.division || am.section}</span>
+                  <div className="inline-flex flex-wrap items-center gap-1.5 rounded-md border border-line bg-surface px-2.5 py-1 text-xs text-ink-soft">
+                    {t('student.section')}<span className="ml-1 font-semibold text-ink tabular-nums">{am.division || am.section}</span>
                   </div>
                 )}
                 {(am.current_sem || grad.current_sem) && (
-                  <div className="flex items-center gap-1.5 text-xs text-slate-600 bg-white px-2.5 py-1 rounded-lg border border-slate-200">
-                    <BookOpen className="w-3 h-3 text-indigo-400" />
-                    Sem: <span className="font-semibold ml-1">{am.current_sem || grad.current_sem}</span>
+                  <div className="inline-flex flex-wrap items-center gap-1.5 rounded-md border border-line bg-surface px-2.5 py-1 text-xs text-ink-soft">
+                    <BookOpen className="h-3.5 w-3.5 text-brand-fg" aria-hidden="true" />
+                    {t('student.sem')}<span className="ml-1 font-semibold text-ink tabular-nums">{am.current_sem || grad.current_sem}</span>
                   </div>
                 )}
                 {(am.admission_year || am.year_of_joining || grad.admission_batch) && (
-                  <div className="flex items-center gap-1.5 text-xs text-slate-600 bg-white px-2.5 py-1 rounded-lg border border-slate-200">
-                    <Calendar className="w-3 h-3 text-amber-400" />
-                    Batch: <span className="font-semibold ml-1">{am.admission_year || am.year_of_joining || grad.admission_batch}</span>
+                  <div className="inline-flex flex-wrap items-center gap-1.5 rounded-md border border-line bg-surface px-2.5 py-1 text-xs text-ink-soft">
+                    <Calendar className="h-3.5 w-3.5 text-accent-ink" aria-hidden="true" />
+                    {t('student.batch')}<span className="ml-1 font-semibold text-ink tabular-nums">{am.admission_year || am.year_of_joining || grad.admission_batch}</span>
                   </div>
                 )}
                 {grad.graduation_year && (
-                  <div className="flex items-center gap-1.5 text-xs text-slate-600 bg-white px-2.5 py-1 rounded-lg border border-slate-200">
-                    <GraduationCap className="w-3 h-3 text-green-500" />
-                    Grad: <span className="font-semibold ml-1">{grad.graduation_year}</span>
+                  <div className="inline-flex flex-wrap items-center gap-1.5 rounded-md border border-line bg-surface px-2.5 py-1 text-xs text-ink-soft">
+                    <GraduationCap className="h-3.5 w-3.5 text-ok" aria-hidden="true" />
+                    {t('student.grad')}<span className="ml-1 font-semibold text-ink tabular-nums">{grad.graduation_year}</span>
                   </div>
                 )}
               </div>
             </div>
 
             {/* ── Personal Information ─────────────────────────────────────── */}
-            <div className="p-5 border-b border-slate-100">
-              <h3 className="text-xs font-bold text-slate-600 mb-4 flex items-center gap-2 uppercase tracking-wide">
-                <User className="w-3.5 h-3.5 text-blue-500" />
-                {isKannada ? 'ವೈಯಕ್ತಿಕ ಮಾಹಿತಿ' : 'Personal Information'}
+            <div className="border-b border-line p-4 sm:p-5">
+              <h3 className="t-card mb-4 flex flex-wrap items-center gap-2 text-ink">
+                <User className="h-4 w-4 text-brand-fg" aria-hidden="true" />
+                {t('student.personalInfo')}
               </h3>
               {anyPersonal ? (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
 
                   {/* Family — Names only */}
-                  <Section title={isKannada ? 'ಕುಟುಂಬ' : 'Family & Background'} icon={<User className="w-3 h-3" />}>
+                  <Section title={t('student.family')} icon={<User className="h-3.5 w-3.5 text-brand-fg" aria-hidden="true" />}>
                     {familyNameFields.map(k => (
-                      <InfoRow key={k} label={prettyLabel(k)} value={p[k]} />
+                      <InfoRow key={k} field={k} label={prettyLabel(k, t)} value={p[k]} />
                     ))}
                     {religionFields.map(k => (
-                      <InfoRow key={k} label={prettyLabel(k)} value={p[k]} />
+                      <InfoRow key={k} field={k} label={prettyLabel(k, t)} value={p[k]} />
                     ))}
                   </Section>
 
-                  {/* Parents' Occupation — NEW SECTION */}
+                  {/* Parents' Occupation */}
                   <Section
-                    title={isKannada ? 'ಪಾಲಕರ ವೃತ್ತಿ' : "Parents' Occupation"}
-                    icon={<Briefcase className="w-3 h-3" />}
+                    title={t('student.parentsOccupation')}
+                    icon={<Briefcase className="h-3.5 w-3.5 text-brand-fg" aria-hidden="true" />}
                   >
                     {parentOccupFields.map(k => (
-                      <InfoRow key={k} label={prettyLabel(k)} value={p[k]} icon={<Briefcase className="w-3 h-3 text-slate-400" />} />
+                      <InfoRow key={k} field={k} label={prettyLabel(k, t)} value={p[k]} icon={<Briefcase className="h-3.5 w-3.5 text-ink-faint" aria-hidden="true" />} />
                     ))}
-                    <InfoRow label="Parents Phone" value={p.parents_phone} icon={<Phone className="w-3 h-3 text-slate-400" />} />
+                    <InfoRow field="parents_phone" label={prettyLabel('parents_phone', t)} value={p.parents_phone} icon={<Phone className="h-3.5 w-3.5 text-ink-faint" aria-hidden="true" />} />
                   </Section>
 
                   {/* Personal Identity */}
-                  <Section title={isKannada ? 'ಗುರುತು' : 'Personal Identity'} icon={<Shield className="w-3 h-3" />}>
+                  <Section title={t('student.personalIdentity')} icon={<Shield className="h-3.5 w-3.5 text-brand-fg" aria-hidden="true" />}>
                     {identityFields.map(k => (
                       <InfoRow
                         key={k}
-                        label={prettyLabel(k)}
+                        field={k}
+                        label={prettyLabel(k, t)}
                         value={p[k]}
                         icon={
-                          k === 'blood_group' ? <Droplet className="w-3 h-3 text-red-400" /> :
-                          k === 'dob' ? <Calendar className="w-3 h-3 text-slate-400" /> : null
+                          k === 'blood_group' ? <Droplet className="h-3.5 w-3.5 text-err" aria-hidden="true" /> :
+                          k === 'dob' ? <Calendar className="h-3.5 w-3.5 text-ink-faint" aria-hidden="true" /> : null
                         }
                       />
                     ))}
                   </Section>
 
                   {/* Contact */}
-                  <Section title={isKannada ? 'ಸಂಪರ್ಕ' : 'Contact Details'} icon={<Phone className="w-3 h-3" />}>
+                  <Section title={t('student.contact')} icon={<Phone className="h-3.5 w-3.5 text-brand-fg" aria-hidden="true" />}>
                     {contactFields.map(k => (
-                      <InfoRow key={k} label={prettyLabel(k)} value={p[k]} icon={<Phone className="w-3 h-3 text-slate-400" />} />
+                      <InfoRow key={k} field={k} label={prettyLabel(k, t)} value={p[k]} icon={<Phone className="h-3.5 w-3.5 text-ink-faint" aria-hidden="true" />} />
                     ))}
                   </Section>
 
                   {/* Address */}
-                  <Section title={isKannada ? 'ವಿಳಾಸ' : 'Address'} icon={<MapPin className="w-3 h-3" />}>
+                  <Section title={t('student.address')} icon={<MapPin className="h-3.5 w-3.5 text-brand-fg" aria-hidden="true" />}>
                     {(p.permanent_address || p.address) && (
                       <InfoRow
-                        label={p.permanent_address ? 'Permanent Address' : 'Address'}
+                        field={p.permanent_address ? 'permanent_address' : 'address'}
+                        label={p.permanent_address ? prettyLabel('permanent_address', t) : prettyLabel('address', t)}
                         value={p.permanent_address || p.address}
-                        icon={<Home className="w-3 h-3 text-slate-400" />}
+                        icon={<Home className="h-3.5 w-3.5 text-ink-faint" aria-hidden="true" />}
                       />
                     )}
                     {p.current_address && p.current_address !== (p.permanent_address || p.address) && (
-                      <InfoRow label="Current Address" value={p.current_address} icon={<MapPin className="w-3 h-3 text-slate-400" />} />
+                      <InfoRow field="current_address" label={prettyLabel('current_address', t)} value={p.current_address} icon={<MapPin className="h-3.5 w-3.5 text-ink-faint" aria-hidden="true" />} />
                     )}
                     {addressSpecific.map(k => (
-                      <InfoRow key={k} label={prettyLabel(k)} value={p[k]} icon={<MapPin className="w-3 h-3 text-slate-400" />} />
+                      <InfoRow key={k} field={k} label={prettyLabel(k, t)} value={p[k]} icon={<MapPin className="h-3.5 w-3.5 text-ink-faint" aria-hidden="true" />} />
                     ))}
                   </Section>
 
-                  {/* Admission / Other Info — NEW SECTION */}
-                  <Section title={isKannada ? 'ಪ್ರವೇಶ ವಿವರ' : 'Admission Details'} icon={<Info className="w-3 h-3" />}>
+                  {/* Admission / Other Info */}
+                  <Section title={t('student.admissionDetails')} icon={<Info className="h-3.5 w-3.5 text-brand-fg" aria-hidden="true" />}>
                     {admissionInfoFields.map(k => (
-                      <InfoRow key={k} label={prettyLabel(k)} value={p[k]} />
+                      <InfoRow key={k} field={k} label={prettyLabel(k, t)} value={p[k]} />
                     ))}
                   </Section>
 
                 </div>
               ) : (
-                <p className="text-sm text-slate-400 italic flex items-center gap-2 py-3">
-                  <AlertCircle className="w-4 h-4" />
-                  {isKannada ? 'ವೈಯಕ್ತಿಕ ಮಾಹಿತಿ ಲಭ್ಯವಿಲ್ಲ' : 'Personal information not available.'}
-                </p>
+                <div className="empty-state py-5">
+                  <AlertCircle className="h-4 w-4" aria-hidden="true" />
+                  <p className="t-support">{t('student.personalUnavailable')}</p>
+                </div>
               )}
             </div>
 
             {/* ── Graduation Status ────────────────────────────────────────── */}
             {(grad.graduation_status || grad.graduation_year || grad.student_type) && (
-              <div className="px-5 py-3 bg-gradient-to-r from-green-50 to-emerald-50 border-b border-green-100">
-                <h3 className="text-xs font-bold text-slate-600 mb-2 flex items-center gap-2 uppercase tracking-wide">
-                  <GraduationCap className="w-3.5 h-3.5 text-green-600" />
-                  {isKannada ? 'ಪದವಿ ಮಾಹಿತಿ' : 'Graduation Status'}
+              <div className="border-b border-line bg-ok-soft/60 px-4 py-3 sm:px-5">
+                <h3 className="t-card mb-2 flex flex-wrap items-center gap-2 text-ink">
+                  <GraduationCap className="h-4 w-4 text-ok" aria-hidden="true" />
+                  {t('student.graduationStatus')}
                 </h3>
-                <div className="flex flex-wrap gap-4">
+                <div className="flex flex-wrap gap-x-6 gap-y-3">
                   {grad.student_type && (
-                    <div>
-                      <p className="text-[10px] text-slate-500 uppercase">Type</p>
-                      <p className="text-sm font-semibold">{grad.student_type}</p>
+                    <div className="min-w-0">
+                      <p className="t-label text-ink-mute">{t('student.type')}</p>
+                      <p className="t-body break-words font-semibold text-ink">{grad.student_type}</p>
                     </div>
                   )}
                   {grad.admission_batch && (
-                    <div>
-                      <p className="text-[10px] text-slate-500 uppercase">Admission Batch</p>
-                      <p className="text-sm font-semibold">{grad.admission_batch}</p>
+                    <div className="min-w-0">
+                      <p className="t-label text-ink-mute">{t('student.admissionBatch')}</p>
+                      <p className="t-body break-words font-semibold text-ink tabular-nums">{grad.admission_batch}</p>
                     </div>
                   )}
                   {grad.graduation_year && (
-                    <div>
-                      <p className="text-[10px] text-slate-500 uppercase">Graduation Year</p>
-                      <p className="text-sm font-bold text-green-700">{grad.graduation_year}</p>
+                    <div className="min-w-0">
+                      <p className="t-label text-ink-mute">{t('student.graduationYear')}</p>
+                      <p className="t-body break-words font-bold text-ok tabular-nums">{grad.graduation_year}</p>
                     </div>
                   )}
                   {grad.graduation_status && (
-                    <div>
-                      <p className="text-[10px] text-slate-500 uppercase">Status</p>
+                    <div className="min-w-0">
+                      <p className="t-label text-ink-mute">{t('common.status')}</p>
                       <GradBadge status={grad.graduation_status} />
                     </div>
                   )}
@@ -569,41 +626,41 @@ export default function CombinedStudentView({ data, responseLanguage }) {
             )}
 
             {/* ── Academic Information — SGPA / Marks ─────────────────────── */}
-            <div className="p-5 border-b border-slate-100">
-              <h3 className="text-xs font-bold text-slate-600 mb-3 flex items-center gap-2 uppercase tracking-wide">
-                <BookOpen className="w-3.5 h-3.5 text-indigo-500" />
-                {isKannada ? 'ಶೈಕ್ಷಣಿಕ ಮಾಹಿತಿ' : 'Academic Information'}
+            <div className="border-b border-line p-4 sm:p-5">
+              <h3 className="t-card mb-3 flex flex-wrap items-center gap-2 text-ink">
+                <BookOpen className="h-4 w-4 text-brand-fg" aria-hidden="true" />
+                {t('student.academicInfo')}
                 {!hasAcademic && (
-                  <span className="text-xs font-normal text-slate-400 italic ml-2 flex items-center gap-1">
-                    <AlertCircle className="w-3 h-3" />
-                    {isKannada ? 'ಲಭ್ಯವಿಲ್ಲ' : 'No academic records'}
+                  <span className="t-support ml-1 flex flex-wrap items-center gap-1 font-normal text-ink-mute">
+                    <AlertCircle className="h-3.5 w-3.5" aria-hidden="true" />
+                    {t('student.noAcademicShort')}
                   </span>
                 )}
               </h3>
               {hasAcademic ? (
                 <GpaTable data={student.academic_rows} />
               ) : (
-                <p className="text-sm text-slate-400 italic flex items-center gap-2 py-1">
-                  <AlertCircle className="w-4 h-4" />
-                  {isKannada ? 'ಶೈಕ್ಷಣಿಕ ಮಾಹಿತಿ ಲಭ್ಯವಿಲ್ಲ' : 'No academic records found.'}
-                </p>
+                <div className="empty-state py-4">
+                  <AlertCircle className="h-4 w-4" aria-hidden="true" />
+                  <p className="t-support">{t('student.academicUnavailable')}</p>
+                </div>
               )}
             </div>
 
-            {/* ── Backlogs — NEW SECTION ───────────────────────────────────── */}
-            <div className="p-5 border-b border-slate-100">
-              <h3 className="text-xs font-bold text-slate-600 mb-3 flex items-center gap-2 uppercase tracking-wide">
-                <FileWarning className="w-3.5 h-3.5 text-amber-500" />
-                {isKannada ? 'ಬ್ಯಾಕ್‌ಲಾಗ್‌ಗಳು' : 'Backlogs / Arrears'}
+            {/* ── Backlogs ─────────────────────────────────────────────────── */}
+            <div className="border-b border-line p-4 sm:p-5">
+              <h3 className="t-card mb-3 flex flex-wrap items-center gap-2 text-ink">
+                <FileWarning className="h-4 w-4 text-warn" aria-hidden="true" />
+                {t('student.backlogs')}
               </h3>
               <BacklogsSection usn={student.usn} rawText={backlogs_raw} />
             </div>
 
-            {/* ── Fees — NEW SECTION ───────────────────────────────────────── */}
-            <div className="p-5">
-              <h3 className="text-xs font-bold text-slate-600 mb-3 flex items-center gap-2 uppercase tracking-wide">
-                <CreditCard className="w-3.5 h-3.5 text-violet-500" />
-                {isKannada ? 'ಶುಲ್ಕ ಮಾಹಿತಿ' : 'Fee Details'}
+            {/* ── Fees ─────────────────────────────────────────────────────── */}
+            <div className="p-4 sm:p-5">
+              <h3 className="t-card mb-3 flex flex-wrap items-center gap-2 text-ink">
+                <CreditCard className="h-4 w-4 text-brand-fg" aria-hidden="true" />
+                {t('student.fees')}
               </h3>
               <FeesSection usn={student.usn} nonce={nonce} />
             </div>
@@ -617,7 +674,7 @@ export default function CombinedStudentView({ data, responseLanguage }) {
           usn={editor.usn}
           name={editor.name}
           onClose={() => setEditor(null)}
-          onSaved={() => setNonce(n => n + 1)}
+          onSaved={() => { setNonce(n => n + 1); setFlashUsn(editor.usn); }}
         />
       )}
       {editor?.type === 'fees' && (
@@ -625,7 +682,7 @@ export default function CombinedStudentView({ data, responseLanguage }) {
           usn={editor.usn}
           name={editor.name}
           onClose={() => setEditor(null)}
-          onSaved={() => setNonce(n => n + 1)}
+          onSaved={() => { setNonce(n => n + 1); setFlashUsn(editor.usn); }}
         />
       )}
     </div>

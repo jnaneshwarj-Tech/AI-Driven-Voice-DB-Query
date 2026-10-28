@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Student Database ERP">
+  <rect width="32" height="32" rx="7" fill="#101827"/>
+  <path d="M16 6.5 25 11v10L16 25.5 7 21V11z" fill="none" stroke="#54B7A4" stroke-width="1.6"/>
+  <circle cx="16" cy="16" r="3.4" fill="#D6B477"/>
+  <path d="M16 9.4v3.2M16 19.4v3.2M9.6 12.7l2.8 1.6M19.6 17.7l2.8 1.6M22.4 12.7l-2.8 1.6M12.4 17.7l-2.8 1.6" stroke="#D6B477" stroke-width="1.3" stroke-linecap="round"/>
+</svg>

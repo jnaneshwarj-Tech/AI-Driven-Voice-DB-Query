@@ -6,33 +6,43 @@
  * filter and sorting) — never the whole database. The user picks a category,
  * a record scope and a format, previews the real table, then downloads or
  * prints it.
+ *
+ * Print path note: the popup receives the backend's own HTML document
+ * (res.data is written verbatim into it). That HTML has no access to this
+ * app's Tailwind bundle, so nothing here may inject class names into it.
  */
 import { useState, useEffect } from 'react';
 import api from '../services/api';
+import { useI18n } from '../context/LanguageContext';
 import {
   X, Users, GraduationCap, User, Wallet, UserX, Contact,
   FileText, Table2, Sheet, Printer, Eye, Download, AlertCircle,
 } from 'lucide-react';
 
+// ids are payload values sent to /export/report — they must never change.
+// Display titles/descriptions live in i18n under report.cat.<id>.(title|desc).
 const CATEGORIES = [
-  { id: 'student_list', icon: Users, title: 'Student List', desc: 'USN, name, branch, semester and the other columns shown in the results.' },
-  { id: 'academic', icon: GraduationCap, title: 'Academic', desc: 'Semester, SGPA, CGPA and branch for the shown students.' },
-  { id: 'personal', icon: User, title: 'Personal Details', desc: 'Name, date of birth, address and personal fields you are allowed to see.' },
-  { id: 'fees', icon: Wallet, title: 'Fees', desc: 'Total paid, pending amount and payment status, where available.' },
-  { id: 'discontinued', icon: UserX, title: 'Discontinued Students', desc: 'Discontinuation date, reason and current status.' },
-  { id: 'individual', icon: Contact, title: 'Individual Student', desc: 'Full details of one selected student (when exactly one is chosen).' },
+  { id: 'student_list', icon: Users },
+  { id: 'academic', icon: GraduationCap },
+  { id: 'personal', icon: User },
+  { id: 'fees', icon: Wallet },
+  { id: 'discontinued', icon: UserX },
+  { id: 'individual', icon: Contact },
 ];
 
+// ids are payload values ('pdf' | 'excel' | 'csv' | 'print'); labels are i18n
+// keys report.fmt.<id> (PDF/CSV/Excel stay in Latin script).
 const FORMATS = [
-  { id: 'pdf', icon: FileText, label: 'PDF' },
-  { id: 'excel', icon: Sheet, label: 'Excel' },
-  { id: 'csv', icon: Table2, label: 'CSV' },
-  { id: 'print', icon: Printer, label: 'Print' },
+  { id: 'pdf', icon: FileText },
+  { id: 'excel', icon: Sheet },
+  { id: 'csv', icon: Table2 },
+  { id: 'print', icon: Printer },
 ];
 
 const EXT = { pdf: 'pdf', excel: 'xlsx', csv: 'csv' };
 
 export default function ReportModal({ open, onClose, query = '', filteredRows = [], pageRows = [], selectedRows = [], hasPagedTable = false }) {
+  const { t } = useI18n();
   const [category, setCategory] = useState('student_list');
   const [scope, setScope] = useState('all');
   const [format, setFormat] = useState('pdf');
@@ -71,9 +81,9 @@ export default function ReportModal({ open, onClose, query = '', filteredRows = 
   const body = () => ({ category, rows: scopedRows, subtitle: query });
 
   const detailError = () => {
-    if (scopedRows.length === 0) return 'There are no displayed records to report on.';
+    if (scopedRows.length === 0) return t('report.noRecords');
     if (category === 'individual' && !individualReady) {
-      return 'Select exactly one student (tick one row) for an Individual Student Report.';
+      return t('report.pickOne');
     }
     return '';
   };
@@ -86,7 +96,7 @@ export default function ReportModal({ open, onClose, query = '', filteredRows = 
       if (format === 'print') {
         const res = await api.post('/export/report', { ...body(), format: 'print' });
         const win = window.open('', '_blank', 'width=900,height=700');
-        if (!win) { setError('Please allow pop-ups to print the report.'); return; }
+        if (!win) { setError(t('report.popups')); return; }
         win.document.write(typeof res.data === 'string' ? res.data : '');
         win.document.close(); win.focus();
         setTimeout(() => { win.print(); }, 400);
@@ -101,34 +111,36 @@ export default function ReportModal({ open, onClose, query = '', filteredRows = 
       }
     } catch (e) {
       setError(e?.response?.data?.detail
-        ? (typeof e.response.data.detail === 'string' ? e.response.data.detail : 'Report generation failed.')
-        : 'Report generation failed.');
+        ? (typeof e.response.data.detail === 'string' ? e.response.data.detail : t('report.failed'))
+        : t('report.failed'));
     } finally { setWorking(false); }
   };
 
   const Opt = ({ active, onClick, disabled, icon: Icon, title, desc }) => (
     <button type="button" onClick={onClick} disabled={disabled}
-      className={`flex items-start gap-2.5 w-full text-left px-3 py-2.5 rounded-xl border transition-colors
-        ${active ? 'border-indigo-500 bg-indigo-50 ring-1 ring-indigo-300' : 'border-slate-200 hover:bg-slate-50'}
+      className={`flex items-start gap-2.5 w-full text-left px-3 py-2.5 rounded-md border transition-colors
+        ${active ? 'border-brand bg-brand/10' : 'border-line hover:bg-sunken'}
         ${disabled ? 'opacity-45 cursor-not-allowed' : 'cursor-pointer'}`}>
-      <Icon className={`w-4 h-4 mt-0.5 shrink-0 ${active ? 'text-indigo-600' : 'text-slate-400'}`} />
+      <Icon className={`w-4 h-4 mt-0.5 shrink-0 ${active ? 'text-brand-fg' : 'text-ink-faint'}`} />
       <span className="min-w-0">
-        <span className={`block text-sm font-semibold ${active ? 'text-indigo-800' : 'text-slate-700'}`}>{title}</span>
-        {desc && <span className="block text-[11px] text-slate-500 leading-snug mt-0.5">{desc}</span>}
+        <span className={`block text-sm font-semibold ${active ? 'text-ink' : 'text-ink-soft'}`}>{title}</span>
+        {desc && <span className="block text-[11px] text-ink-mute leading-snug mt-0.5">{desc}</span>}
       </span>
     </button>
   );
 
+  const sectionLabel = 'text-xs font-bold text-ink-mute uppercase tracking-wider mb-2';
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onMouseDown={onClose}>
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto"
-           onMouseDown={e => e.stopPropagation()} role="dialog" aria-modal="true">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 sticky top-0 bg-white rounded-t-2xl z-10">
+    <div className="backdrop" onMouseDown={onClose}>
+      <div className="modal-panel max-w-3xl anim-scale-in"
+           onMouseDown={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="report-modal-title">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-line sticky top-0 bg-surface-elev rounded-t-lg z-10">
           <div>
-            <h2 className="text-base font-bold text-slate-800">Generate Report</h2>
-            {query && <p className="text-xs text-slate-500 truncate max-w-md">Search: “{query}”</p>}
+            <h2 id="report-modal-title" className="t-card text-ink">{t('report.heading')}</h2>
+            {query && <p className="t-support text-ink-mute truncate max-w-md">{t('report.searching', { query })}</p>}
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500">
+          <button onClick={onClose} aria-label={t('common.close')} className="p-1.5 rounded-md hover:bg-sunken text-ink-mute">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -136,10 +148,11 @@ export default function ReportModal({ open, onClose, query = '', filteredRows = 
         <div className="px-5 py-4 space-y-5">
           {/* 1. Report type */}
           <section>
-            <h3 className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">1. Report type</h3>
-            <div className="grid sm:grid-cols-2 gap-2">
+            <h3 className={sectionLabel}>{t('report.stepType')}</h3>
+            <div className="grid sm:grid-cols-2 gap-2 stagger">
               {CATEGORIES.map(c => (
-                <Opt key={c.id} icon={c.icon} title={c.title} desc={c.desc}
+                <Opt key={c.id} icon={c.icon}
+                     title={t(`report.cat.${c.id}.title`)} desc={t(`report.cat.${c.id}.desc`)}
                      active={category === c.id} onClick={() => setCategory(c.id)} />
               ))}
             </div>
@@ -147,36 +160,36 @@ export default function ReportModal({ open, onClose, query = '', filteredRows = 
 
           {/* 2. Which records */}
           <section>
-            <h3 className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">2. Which records</h3>
+            <h3 className={sectionLabel}>{t('report.stepRecords')}</h3>
             <div className="grid sm:grid-cols-3 gap-2">
               {hasPagedTable && (
-                <Opt icon={FileText} title={`Current page (${pageRows.length})`}
-                     desc="Only the rows on the page you are viewing."
+                <Opt icon={FileText} title={t('report.scopePage', { n: pageRows.length })}
+                     desc={t('report.scopePage.desc')}
                      active={scope === 'page'} onClick={() => setScope('page')} />
               )}
-              <Opt icon={Users} title={`Selected students (${selectedRows.length})`}
-                   desc="Rows ticked in the result table."
+              <Opt icon={Users} title={t('report.scopeSelected', { n: selectedRows.length })}
+                   desc={t('report.scopeSelected.desc')}
                    active={scope === 'selected'} onClick={() => setScope('selected')}
                    disabled={selectedRows.length === 0} />
-              <Opt icon={Table2} title={`All matching results (${filteredRows.length})`}
-                   desc="Every row shown by this search, with the same filter and sorting."
+              <Opt icon={Table2} title={t('report.scopeAll', { n: filteredRows.length })}
+                   desc={t('report.scopeAll.desc')}
                    active={scope === 'all'} onClick={() => setScope('all')} />
             </div>
             {scope === 'selected' && selectedRows.length === 0 && (
-              <p className="text-[11px] text-amber-600 mt-1.5">Tick rows in the table first, or choose another option.</p>
+              <p className="text-[11px] text-warn mt-1.5">{t('report.tickFirst')}</p>
             )}
           </section>
 
           {/* 3. Format */}
           <section>
-            <h3 className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">3. Format</h3>
+            <h3 className={sectionLabel}>{t('report.stepFormat')}</h3>
             <div className="flex gap-2 flex-wrap">
               {FORMATS.map(f => (
                 <button key={f.id} type="button" onClick={() => setFormat(f.id)}
-                  className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl border text-sm font-semibold transition-colors
-                    ${format === f.id ? 'border-indigo-500 bg-indigo-50 text-indigo-700 ring-1 ring-indigo-300'
-                                       : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
-                  <f.icon className="w-4 h-4" /> {f.label}
+                  className={`flex items-center gap-1.5 px-3.5 py-2 rounded-md border text-sm font-semibold transition-colors
+                    ${format === f.id ? 'border-brand bg-brand/10 text-brand-fg'
+                                       : 'border-line text-ink-soft hover:bg-sunken'}`}>
+                  <f.icon className="w-4 h-4" /> {t(`report.fmt.${f.id}`)}
                 </button>
               ))}
             </div>
@@ -184,32 +197,33 @@ export default function ReportModal({ open, onClose, query = '', filteredRows = 
 
           {/* Preview */}
           <section>
-            <h3 className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-              <Eye className="w-3.5 h-3.5" /> Preview
+            <h3 className={`${sectionLabel} flex items-center gap-1.5`}>
+              <Eye className="w-3.5 h-3.5" /> {t('report.preview')}
             </h3>
             {loadingPreview ? (
-              <div className="text-sm text-slate-400 py-6 text-center border border-dashed border-slate-200 rounded-xl">Preparing preview…</div>
+              <div className="t-body text-ink-faint py-6 text-center border border-dashed border-line rounded-md">{t('report.preparingPreview')}</div>
             ) : preview ? (
-              <div className="border border-slate-200 rounded-xl overflow-hidden">
-                <div className="px-3 py-2 bg-slate-50 text-[11px] text-slate-600 flex flex-wrap gap-x-3 border-b border-slate-100">
-                  <span className="font-semibold text-slate-700">{preview.title}</span>
-                  <span>Records: {preview.record_count}</span>
-                  <span>By: {preview.kind === 'detail' ? '' : `${preview.generated_by?.username} (${preview.generated_by?.role})`}</span>
+              <div className="border border-line rounded-md overflow-hidden bg-surface">
+                <div className="px-3 py-2 bg-sunken text-[11px] text-ink-mute flex flex-wrap gap-x-3 border-b border-line">
+                  {/* preview.* values are backend-authored — rendered as-is */}
+                  <span className="font-semibold text-ink-soft">{preview.title}</span>
+                  <span>{t('report.recordsCount', { n: preview.record_count })}</span>
+                  <span>{t('report.by', { who: preview.kind === 'detail' ? '' : `${preview.generated_by?.username} (${preview.generated_by?.role})` })}</span>
                 </div>
                 {(preview.notes || []).map((n, i) => (
-                  <p key={i} className="px-3 py-1.5 text-[11px] text-amber-700 bg-amber-50 border-b border-amber-100">Note: {n}</p>
+                  <p key={i} className="px-3 py-1.5 text-[11px] text-warn bg-warn-soft border-b border-line">{t('report.note', { text: n })}</p>
                 ))}
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead className="bg-slate-50">
+                <div className="table-scroll">
+                  <table className="w-full">
+                    <thead>
                       <tr>{(preview.columns || []).map(c => (
-                        <th key={c.key} className="px-2.5 py-1.5 text-left font-semibold text-slate-500 whitespace-nowrap">{c.label}</th>
+                        <th key={c.key} className="th">{c.label}</th>
                       ))}</tr>
                     </thead>
-                    <tbody className="divide-y divide-slate-100">
+                    <tbody className="divide-y divide-line">
                       {(preview.records || []).map((r, i) => (
                         <tr key={i}>{(preview.columns || []).map(c => (
-                          <td key={c.key} className="px-2.5 py-1.5 text-slate-700 whitespace-nowrap max-w-[220px] truncate">
+                          <td key={c.key} className="td max-w-[220px] truncate">
                             {r[c.key] === null || r[c.key] === undefined || r[c.key] === '' ? '' : String(r[c.key])}
                           </td>
                         ))}</tr>
@@ -217,40 +231,39 @@ export default function ReportModal({ open, onClose, query = '', filteredRows = 
                     </tbody>
                   </table>
                   {preview.records?.length === 0 && (
-                    <p className="px-3 py-4 text-center text-slate-400 text-xs">No rows for this report with the selected students.</p>
+                    <p className="px-3 py-4 text-center text-ink-faint text-xs">{t('report.noRows')}</p>
                   )}
                 </div>
                 {preview.truncated_preview && (
-                  <p className="px-3 py-1.5 text-[11px] text-slate-400 bg-slate-50 border-t border-slate-100">
-                    Showing first 15 of {preview.record_count} rows — the downloaded report contains all of them.
+                  <p className="px-3 py-1.5 text-[11px] text-ink-mute bg-sunken border-t border-line">
+                    {t('report.truncated', { n: preview.record_count })}
                   </p>
                 )}
                 {preview.kind === 'detail' && (preview.sections || []).length > 0 && (
-                  <p className="px-3 py-1.5 text-[11px] text-slate-500 bg-slate-50 border-t border-slate-100">
-                    Also included: {preview.sections.join(' · ')}
+                  <p className="px-3 py-1.5 text-[11px] text-ink-mute bg-sunken border-t border-line">
+                    {t('report.alsoIncluded', { sections: preview.sections.join(' · ') })}
                   </p>
                 )}
               </div>
             ) : (
-              <div className="text-sm text-slate-400 py-6 text-center border border-dashed border-slate-200 rounded-xl">Nothing to preview — choose records first.</div>
+              <div className="t-body text-ink-faint py-6 text-center border border-dashed border-line rounded-md">{t('report.nothingPreview')}</div>
             )}
           </section>
 
           {error && (
-            <div className="flex items-start gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-xl px-3 py-2.5">
+            <div className="flex items-start gap-2 t-support text-err bg-err-soft border border-err/30 rounded-md px-3 py-2.5">
               <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" /> {error}
             </div>
           )}
         </div>
 
-        <div className="px-5 py-4 border-t border-slate-100 flex items-center justify-end gap-2 sticky bottom-0 bg-white rounded-b-2xl">
-          <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-xl border border-slate-200">
-            Close
+        <div className="px-5 py-4 border-t border-line flex flex-wrap items-center justify-end gap-2 sticky bottom-0 bg-surface-elev rounded-b-lg">
+          <button onClick={onClose} className="btn btn-ghost">
+            {t('common.close')}
           </button>
-          <button onClick={download} disabled={working || loadingPreview}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 rounded-xl">
+          <button onClick={download} disabled={working || loadingPreview} className="btn btn-primary">
             {format === 'print' ? <Printer className="w-4 h-4" /> : <Download className="w-4 h-4" />}
-            {working ? 'Preparing…' : format === 'print' ? 'Print Report' : `Download ${format === 'excel' ? 'Excel' : format.toUpperCase()}`}
+            {working ? t('report.working') : format === 'print' ? t('report.printReport') : t('report.downloadFmt', { fmt: format === 'excel' ? 'Excel' : format.toUpperCase() })}
           </button>
         </div>
       </div>

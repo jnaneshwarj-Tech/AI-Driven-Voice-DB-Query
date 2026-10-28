@@ -728,6 +728,14 @@ def _student_lookup_query(effective_query: str):
     )
     target = re.sub(r"\s+(?:(?:personal|complete|full|academic|acadamic|acdemic)\s+)?(?:details|information|info|profile)\s*$", "", target, flags=re.I)
     target = re.sub(r"(?:['’]s|s')\s*$", "", target).strip(" \t\r\n?.!,;:")
+    # "student" (and "boy"/"girl") labels the person, it is not part of the name:
+    # "details of student Manoj Kumar" has to search for "Manoj Kumar", not for
+    # "student Manoj Kumar".
+    target = re.sub(
+        r"^(?:(?:the|a)\s+)?(?:student|learner|boy|girl|candidate)\s+"
+        r"(?:named\s+|called\s+|whose\s+name\s+is\s+)?",
+        "", target, flags=re.I, count=1,
+    ).strip(" \t\r\n?.!,;:")
 
     if usn_match:
         identity_sql = "UPPER(s.usn) = %s"
@@ -741,8 +749,17 @@ def _student_lookup_query(effective_query: str):
         if re.search(r"\bstudents\b|\b(?:who|whose|that)\b", target, re.I) or re.search(
                 r"\b(?:contains?|containing|includes?|including)\b", lower_query):
             return None
-        identity_sql = "LOWER(TRIM(s.name)) = LOWER(%s)"
-        identity_value = target
+        # A one- or two-word target is a fragment of the full name the college
+        # stores ("manoj" against "Manoj J R"), so equality answered
+        # "show student manoj" with zero rows. A longer, complete phrase stays an
+        # exact comparison, so "named Rahul Sharma" does not widen into every
+        # person whose name merely contains those words.
+        if len(target.split()) <= 2:
+            identity_sql = "LOWER(TRIM(s.name)) LIKE %s"
+            identity_value = f"%{target.casefold()}%"
+        else:
+            identity_sql = "LOWER(TRIM(s.name)) = LOWER(%s)"
+            identity_value = target
     else:
         return None
 
@@ -2059,6 +2076,12 @@ def _rule_based_fallback_sql(effective_query: str) -> str | None:
             if cand and cand_words and len(cand) >= 2:
                 safe_name = cand
                 col_sql = f"COALESCE(s.`{field_col}`, '') AS `{field_col}`" if field_col == 'branch' else f"s.`{field_col}`"
+                # For specific "What is <Name>'s <field>?" questions, project only the requested field
+                if re.search(r"^\s*what\s+is\b", effective_query, re.I):
+                    return (
+                        f"SELECT {col_sql} FROM students s WHERE LOWER(TRIM(s.name)) = LOWER(%s) ORDER BY s.usn ASC",
+                        [safe_name]
+                    )
                 # Check exact name match first
                 return (
                     f"SELECT s.usn, s.name, {col_sql} FROM students s WHERE LOWER(TRIM(s.name)) = LOWER(%s) ORDER BY s.usn ASC",

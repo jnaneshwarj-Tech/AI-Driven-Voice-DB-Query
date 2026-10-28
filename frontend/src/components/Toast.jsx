@@ -10,6 +10,7 @@
 import { useState, useCallback, useRef, createContext, useContext } from 'react';
 import { CheckCircle, XCircle, AlertTriangle, Info, X, RotateCcw } from 'lucide-react';
 import api from '../services/api';
+import { useI18n } from '../context/LanguageContext';
 
 // ── Context ───────────────────────────────────────────────────────────────────
 const ToastContext = createContext(null);
@@ -20,6 +21,7 @@ export function useToast() {
 
 // ── Individual Toast ──────────────────────────────────────────────────────────
 function ToastItem({ toast, onDismiss, onUndoDone }) {
+  const { t } = useI18n();
   const [undoing, setUndoing] = useState(false);
   const [undone, setUndone]   = useState(false);
   const timerRef = useRef(null);
@@ -55,30 +57,32 @@ function ToastItem({ toast, onDismiss, onUndoDone }) {
     }
   };
 
+  // Token-based type styles (same four type keys as before — 'success' |
+  // 'error' | 'warning' | 'info'; only the visual layer changed).
   const STYLES = {
     success: {
-      bar:  'bg-green-500',
-      icon: <CheckCircle className="w-4 h-4 text-green-500 flex-shrink-0" />,
-      ring: 'border-green-200 bg-green-55/95 dark:border-green-800/80 dark:bg-green-950/95',
-      text: 'text-green-900 dark:text-green-200',
+      bar:  'bg-ok',
+      icon: <CheckCircle className="w-4 h-4 text-ok flex-shrink-0" />,
+      ring: 'border-ok/40 bg-ok-soft/95',
+      text: 'text-ok',
     },
     error: {
-      bar:  'bg-red-500',
-      icon: <XCircle className="w-4 h-4 text-red-500 flex-shrink-0" />,
-      ring: 'border-red-200 bg-red-55/95 dark:border-red-800/80 dark:bg-red-950/95',
-      text: 'text-red-900 dark:text-red-200',
+      bar:  'bg-err',
+      icon: <XCircle className="w-4 h-4 text-err flex-shrink-0" />,
+      ring: 'border-err/40 bg-err-soft/95',
+      text: 'text-err',
     },
     warning: {
-      bar:  'bg-amber-500',
-      icon: <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0" />,
-      ring: 'border-amber-200 bg-amber-55/95 dark:border-amber-800/80 dark:bg-amber-950/95',
-      text: 'text-amber-900 dark:text-amber-200',
+      bar:  'bg-warn',
+      icon: <AlertTriangle className="w-4 h-4 text-warn flex-shrink-0" />,
+      ring: 'border-warn/40 bg-warn-soft/95',
+      text: 'text-warn',
     },
     info: {
-      bar:  'bg-blue-500',
-      icon: <Info className="w-4 h-4 text-blue-500 flex-shrink-0" />,
-      ring: 'border-blue-200 bg-blue-55/95 dark:border-blue-800/80 dark:bg-blue-950/95',
-      text: 'text-blue-900 dark:text-blue-200',
+      bar:  'bg-info',
+      icon: <Info className="w-4 h-4 text-info flex-shrink-0" />,
+      ring: 'border-info/40 bg-info-soft/95',
+      text: 'text-info',
     },
   };
 
@@ -86,13 +90,12 @@ function ToastItem({ toast, onDismiss, onUndoDone }) {
 
   return (
     <div
-      className={`relative flex items-start gap-3 px-4 py-3 rounded-xl border shadow-lg backdrop-blur-sm
+      className={`toast-enter relative flex items-start gap-3 px-4 py-3 rounded-lg border shadow-lg backdrop-blur-sm
         min-w-[280px] max-w-[380px] overflow-hidden
-        ${s.ring} ${undone ? 'opacity-60' : 'opacity-100'}
-        animate-in slide-in-from-right-4 fade-in duration-300`}
+        ${s.ring} ${undone ? 'opacity-60' : 'opacity-100'}`}
     >
       {/* Progress bar */}
-      <div className="absolute bottom-0 left-0 h-0.5 bg-slate-200 w-full">
+      <div className="absolute bottom-0 left-0 h-0.5 bg-line w-full">
         <div
           className={`h-full transition-none ${s.bar}`}
           style={{ width: `${progress}%` }}
@@ -106,7 +109,7 @@ function ToastItem({ toast, onDismiss, onUndoDone }) {
           <p className={`text-xs font-bold ${s.text} mb-0.5`}>{toast.title}</p>
         )}
         <p className={`text-xs ${s.text} leading-snug`}>
-          {undone ? '✓ Restored successfully!' : toast.message}
+          {undone ? t('toast.restored') : toast.message}
         </p>
 
         {/* UNDO button */}
@@ -114,19 +117,20 @@ function ToastItem({ toast, onDismiss, onUndoDone }) {
           <button
             onClick={handleUndo}
             disabled={undoing}
-            className="mt-1.5 flex items-center gap-1 text-[11px] font-bold text-blue-700 hover:text-blue-900 transition-colors disabled:opacity-50"
+            className="mt-1.5 flex items-center gap-1 text-[11px] font-bold text-info hover:underline transition-colors disabled:opacity-50"
           >
             <RotateCcw className={`w-3 h-3 ${undoing ? 'animate-spin' : ''}`} />
-            {undoing ? 'Restoring...' : `UNDO — restore ${toast.undoName || 'student'}`}
+            {undoing ? t('toast.restoring') : t('toast.undo', { name: toast.undoName || t('toast.student') })}
           </button>
         )}
       </div>
 
       <button
         onClick={() => onDismiss(toast.id)}
-        className="p-0.5 rounded hover:bg-black/10 transition-colors flex-shrink-0"
+        aria-label={t('common.close')}
+        className="p-0.5 rounded hover:bg-ink/10 transition-colors flex-shrink-0"
       >
-        <X className="w-3.5 h-3.5 text-slate-400" />
+        <X className="w-3.5 h-3.5 text-ink-mute" />
       </button>
     </div>
   );
@@ -158,8 +162,8 @@ export function ToastProvider({ children }) {
   return (
     <ToastContext.Provider value={{ showToast, dismissToast }}>
       {children}
-      {/* Toast container — bottom-right */}
-      <div className="fixed bottom-5 right-5 z-[9999] flex flex-col gap-2 items-end pointer-events-none">
+      {/* Toast container — bottom-right, on the single overlay z-scale (.toaster) */}
+      <div aria-live="polite" className="toaster fixed bottom-5 right-5 flex flex-col gap-2 items-end pointer-events-none">
         {toasts.map(t => (
           <div key={t.id} className="pointer-events-auto">
             <ToastItem

@@ -1,0 +1,48 @@
+{
+  "name": "gec-student-db-desktop",
+  "version": "1.0.0",
+  "description": "AI-Driven College Student Database Management System — Windows Desktop Client",
+  "main": "main.js",
+  "author": "Government Engineering College Mosalehosahalli, Hassan",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^29.1.5",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "edu.gechassan.studentdb",
+    "productName": "GEC Student Database Management",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "config.json.example",
+      "../frontend/dist/**/*"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "GEC Student Database"
+    }
+  },
+  "dependencies": {
+    "ai-database-frontend": "file:.."
+  }
+}

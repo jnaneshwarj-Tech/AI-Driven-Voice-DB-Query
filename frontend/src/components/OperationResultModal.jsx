@@ -9,71 +9,76 @@ import {
   User, Database, Clock, RotateCcw, AlertTriangle, ChevronDown, ChevronRight
 } from 'lucide-react';
 import api from '../services/api';
+import { useI18n } from '../context/LanguageContext';
 
+// Visual type tokens only — `storage` values are real table names and are
+// rendered untranslated; `titleKey` resolves through i18n.
 const OP_CONFIG = {
   DELETE: {
     icon:    <Trash2 className="w-5 h-5" />,
-    color:   'text-red-600',
-    bg:      'bg-red-50 dark:bg-red-950/40',
-    border:  'border-red-200 dark:border-red-800',
-    badge:   'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300',
-    title:   'Student Deleted',
+    color:   'text-err',
+    bg:      'bg-err-soft',
+    border:  'border-err/40',
+    badge:   'bg-err/15 text-err',
+    titleKey: 'results.deleted',
     storage: 'soft_delete_records',
   },
   INSERT: {
     icon:    <CheckCircle className="w-5 h-5" />,
-    color:   'text-green-600',
-    bg:      'bg-green-50 dark:bg-green-950/40',
-    border:  'border-green-200 dark:border-green-800',
-    badge:   'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300',
-    title:   'Student Added',
+    color:   'text-ok',
+    bg:      'bg-ok-soft',
+    border:  'border-ok/40',
+    badge:   'bg-ok/15 text-ok',
+    titleKey: 'results.added',
     storage: 'students table',
   },
   UPDATE: {
     icon:    <Edit3 className="w-5 h-5" />,
-    color:   'text-blue-600',
-    bg:      'bg-blue-50 dark:bg-blue-950/40',
-    border:  'border-blue-200 dark:border-blue-800',
-    badge:   'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300',
-    title:   'Record Updated',
+    color:   'text-info',
+    bg:      'bg-info-soft',
+    border:  'border-info/40',
+    badge:   'bg-info/15 text-info',
+    titleKey: 'results.updated',
     storage: 'students table + student_history',
   },
   UPLOAD: {
     icon:    <Upload className="w-5 h-5" />,
-    color:   'text-indigo-600',
-    bg:      'bg-indigo-50 dark:bg-indigo-950/40',
-    border:  'border-indigo-200 dark:border-indigo-800',
-    badge:   'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300',
-    title:   'Upload Completed',
+    color:   'text-brand-fg',
+    bg:      'bg-brand/10',
+    border:  'border-brand/30',
+    badge:   'bg-brand/15 text-brand-fg',
+    titleKey: 'results.uploadDone',
     storage: 'students table + marks table',
   },
 };
 
 function DetailList({ title, rows, emptyLabel }) {
   const [open, setOpen] = useState(false);
+  const { t } = useI18n();
   if (!rows || rows.length === 0) return null;
   return (
-    <div className="border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden">
+    <div className="border border-line rounded-md overflow-hidden">
       <button
         type="button"
         onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-800"
+        className="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold text-ink-soft bg-sunken"
       >
         <span>{title} ({rows.length}{rows.length >= 50 ? '+' : ''})</span>
         {open ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
       </button>
       {open && (
-        <div className="max-h-40 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
+        <div className="max-h-40 overflow-y-auto divide-y divide-line">
           {rows.map((r, i) => (
-            <div key={i} className="px-3 py-2 text-[11px] text-slate-600 dark:text-slate-300">
+            <div key={i} className="px-3 py-2 text-[11px] text-ink-soft">
               <div className="flex justify-between gap-2">
-                <span className="font-mono text-slate-400">Row {r.row_number ?? r.row_index ?? '—'}</span>
+                <span className="font-mono text-ink-faint">{t('results.row', { n: r.row_number ?? r.row_index ?? '—' })}</span>
+                {/* USN and name are data — never translated */}
                 <span className="font-mono">{r.usn || '—'}</span>
               </div>
               <p className="font-medium truncate">{r.name || emptyLabel || '—'}</p>
-              {r.reason && <p className="text-amber-700 dark:text-amber-400 mt-0.5">{r.reason}</p>}
+              {r.reason && <p className="text-warn mt-0.5">{r.reason}</p>}
               {r.problematic_fields?.length > 0 && (
-                <p className="text-slate-400 mt-0.5">Fields: {r.problematic_fields.join(', ')}</p>
+                <p className="text-ink-faint mt-0.5">{t('results.fields', { fields: r.problematic_fields.join(', ') })}</p>
               )}
             </div>
           ))}
@@ -84,6 +89,7 @@ function DetailList({ title, rows, emptyLabel }) {
 }
 
 export default function OperationResultModal({ result, onClose, onUndoDone }) {
+  const { t } = useI18n();
   const [undoing, setUndoing] = useState(false);
   const [undone, setUndone]   = useState(false);
 
@@ -125,90 +131,92 @@ export default function OperationResultModal({ result, onClose, onUndoDone }) {
   })();
 
   const uploadStatCells = uploadStats ? [
-    ['Rows Parsed', uploadStats.rows_parsed ?? 0],
-    ['New', uploadStats.students_added ?? 0],
-    ['Updated', uploadStats.students_updated ?? 0],
-    ['Unchanged', uploadStats.students_unchanged ?? 0],
-    ['Duplicates', uploadStats.duplicate_rows ?? 0],
-    ['Invalid', uploadStats.invalid_rows ?? 0],
-    ['Students Saved', uploadStats.students_saved ?? 0],
-    ['Marks Saved', uploadStats.marks_saved ?? 0],
+    [t('results.rowsParsed'), uploadStats.rows_parsed ?? 0],
+    [t('results.new'), uploadStats.students_added ?? 0],
+    [t('results.updatedShort'), uploadStats.students_updated ?? 0],
+    [t('results.unchanged'), uploadStats.students_unchanged ?? 0],
+    [t('results.duplicates'), uploadStats.duplicate_rows ?? 0],
+    [t('results.invalid'), uploadStats.invalid_rows ?? 0],
+    [t('results.studentsSaved'), uploadStats.students_saved ?? 0],
+    [t('results.marksSaved'), uploadStats.marks_saved ?? 0],
   ] : [];
 
   return (
-    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
-      <div className={`bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border ${cfg.border} w-full max-w-lg overflow-hidden`}
-        style={{ animation: 'slideDown 0.2s ease-out' }}>
+    <div className="backdrop">
+      <div className={`bg-surface-elev rounded-lg shadow-lg border-2 ${cfg.border} w-full max-w-lg overflow-hidden anim-scale-in`}
+        role="dialog" aria-modal="true" aria-labelledby="op-result-title">
 
         <div className={`px-5 py-4 ${cfg.bg} border-b ${cfg.border} flex items-center justify-between`}>
           <div className="flex items-center gap-3">
-            <div className={`p-2 rounded-xl bg-white/60 dark:bg-slate-800/60 ${cfg.color}`}>
+            <div className={`p-2 rounded-md bg-surface-elev/60 ${cfg.color}`}>
               {cfg.icon}
             </div>
             <div>
-              <h3 className={`text-sm font-bold ${cfg.color}`}>{cfg.title}</h3>
+              <h3 id="op-result-title" className={`text-sm font-bold ${cfg.color}`}>{t(cfg.titleKey)}</h3>
               {undone
-                ? <p className="text-xs text-green-600 font-semibold">✓ Restored successfully</p>
-                : <p className="text-xs text-slate-500 dark:text-slate-400">{message}</p>}
+                ? <p className="text-xs text-ok font-semibold">{t('results.restored')}</p>
+                : <p className="text-xs text-ink-mute">{message}</p>}
             </div>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-black/10 dark:hover:bg-white/10 transition-colors">
-            <X className="w-4 h-4 text-slate-400" />
+          <button onClick={onClose} aria-label={t('common.close')} className="p-1.5 rounded-md hover:bg-ink/10 transition-colors">
+            <X className="w-4 h-4 text-ink-mute" />
           </button>
         </div>
 
         <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
           {uploadStats && (
             <>
-              <div className="grid grid-cols-4 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 {uploadStatCells.map(([label, val]) => (
-                  <div key={label} className="bg-slate-50 dark:bg-slate-800 rounded-xl p-2.5 text-center border border-slate-200 dark:border-slate-700">
-                    <p className="text-base font-bold text-slate-800 dark:text-slate-100">{val}</p>
-                    <p className="text-[9px] text-slate-500 dark:text-slate-400 mt-0.5 leading-tight">{label}</p>
+                  <div key={label} className="bg-sunken rounded-md p-2.5 text-center border border-line">
+                    <p className="text-base font-bold text-ink">{val}</p>
+                    <p className="text-[9px] text-ink-mute mt-0.5 leading-tight">{label}</p>
                   </div>
                 ))}
               </div>
               {uploadStats.reconciled === false && (
-                <div className="flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl p-2.5">
+                <div className="flex items-start gap-2 text-xs text-warn bg-warn-soft border border-warn/40 rounded-md p-2.5">
                   <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
                   <span>
-                    Row accounting note: {uploadStats.total_accounted ?? '?'} of {uploadStats.rows_parsed ?? '?'} rows classified.
+                    {t('results.accounting', { accounted: uploadStats.total_accounted ?? '?', parsed: uploadStats.rows_parsed ?? '?' })}
                   </span>
                 </div>
               )}
               {uploadStats.column_mapping && Object.keys(uploadStats.column_mapping).length > 0 && (
-                <p className="text-[10px] text-slate-500 break-words">
-                  Mapping: {Object.entries(uploadStats.column_mapping).map(([k, v]) => `${k}→${v}`).join(', ')}
+                <p className="text-[10px] text-ink-mute break-words">
+                  {/* k→v pairs are API field names — rendered as-is */}
+                  {t('results.mapping', { map: Object.entries(uploadStats.column_mapping).map(([k, v]) => `${k}→${v}`).join(', ') })}
                 </p>
               )}
-              <DetailList title="New records" rows={uploadStats.new_records} />
-              <DetailList title="Updated records" rows={uploadStats.updated_records} />
-              <DetailList title="Duplicate rows" rows={uploadStats.duplicate_list} />
-              <DetailList title="Invalid / rejected rows" rows={uploadStats.rejected_rows} emptyLabel="(no name)" />
+              <DetailList title={t('results.newRecords')} rows={uploadStats.new_records} />
+              <DetailList title={t('results.updatedRecords')} rows={uploadStats.updated_records} />
+              <DetailList title={t('results.duplicateRows')} rows={uploadStats.duplicate_list} />
+              <DetailList title={t('results.invalidRows')} rows={uploadStats.rejected_rows} emptyLabel={t('results.noName')} />
             </>
           )}
 
           {!uploadStats && (
             <div className="flex items-center gap-2 text-sm">
-              <span className="text-slate-500 dark:text-slate-400">Affected rows:</span>
+              <span className="text-ink-mute">{t('results.affectedRows')}</span>
               <span className={`font-bold text-base ${cfg.color}`}>{rowsAffected || affectedStudents.length}</span>
             </div>
           )}
 
           {affectedStudents.length > 0 && !uploadStats && (
             <div>
-              <p className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-2">
-                {operation === 'DELETE' ? 'Moved to Recycle Bin' : 'Stored In Database'}
+              <p className="text-[10px] font-bold text-ink-faint uppercase tracking-wider mb-2">
+                {operation === 'DELETE' ? t('results.recycleBin') : t('results.storedIn')}
               </p>
               <div className="space-y-1.5 max-h-48 overflow-y-auto">
                 {affectedStudents.map((s, i) => (
-                  <div key={i} className="flex items-center gap-3 px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                  <div key={i} className="flex items-center gap-3 px-3 py-2 rounded-md bg-sunken border border-line">
                     <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${cfg.badge}`}>
                       {(s.name || s.usn || '?').charAt(0).toUpperCase()}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate">{s.name || '—'}</p>
-                      <p className="text-[10px] text-slate-400 font-mono">{s.usn}</p>
+                      {/* Name and USN are student data — never translated */}
+                      <p className="text-xs font-semibold text-ink truncate">{s.name || '—'}</p>
+                      <p className="text-[10px] text-ink-faint font-mono">{s.usn}</p>
                     </div>
                   </div>
                 ))}
@@ -216,42 +224,43 @@ export default function OperationResultModal({ result, onClose, onUndoDone }) {
             </div>
           )}
 
-          <div className="flex items-center justify-between text-[11px] text-slate-400 dark:text-slate-500 pt-1 border-t border-slate-100 dark:border-slate-800">
+          <div className="flex items-center justify-between text-[11px] text-ink-mute pt-1 border-t border-line">
             <span className="flex items-center gap-1">
-              <User className="w-3 h-3" /> {performedBy || 'System'}
+              <User className="w-3 h-3" /> {performedBy || t('results.system')}
             </span>
             <span className="flex items-center gap-1">
               <Clock className="w-3 h-3" /> {ts}
             </span>
           </div>
 
-          <div className="flex items-center gap-2 text-[11px] text-slate-400 dark:text-slate-500">
+          <div className="flex items-center gap-2 text-[11px] text-ink-mute">
             <Database className="w-3 h-3 flex-shrink-0" />
-            <span>Storage: <span className="font-mono text-slate-600 dark:text-slate-300">{cfg.storage}</span></span>
+            {/* Storage value is a table name — rendered untranslated */}
+            <span>{t('results.storage')} <span className="font-mono text-ink-soft">{cfg.storage}</span></span>
           </div>
         </div>
 
-        <div className="px-5 pb-4 flex items-center justify-between gap-3">
+        <div className="px-5 pb-4 flex flex-wrap items-center justify-end gap-2">
           {restoreTokens.length > 0 && !undone && (
             <button
               onClick={handleUndo}
               disabled={undoing}
-              className="flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded-xl transition-colors disabled:opacity-50 shadow-sm"
+              className="btn btn-accent btn-sm"
             >
               <RotateCcw className={`w-3.5 h-3.5 ${undoing ? 'animate-spin' : ''}`} />
-              {undoing ? 'Restoring...' : 'UNDO — Restore'}
+              {undoing ? t('results.restoring') : t('results.undo')}
             </button>
           )}
           {undone && (
-            <span className="flex items-center gap-1.5 text-xs text-green-600 font-semibold">
-              <CheckCircle className="w-3.5 h-3.5" /> Restored!
+            <span className="flex items-center gap-1.5 text-xs text-ok font-semibold">
+              <CheckCircle className="w-3.5 h-3.5" /> {t('results.restoredShort')}
             </span>
           )}
           <button
             onClick={onClose}
-            className="ml-auto px-4 py-2 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors"
+            className="btn btn-ghost btn-sm"
           >
-            Close
+            {t('common.close')}
           </button>
         </div>
       </div>

@@ -1,0 +1,7 @@
+{
+  "apiBaseUrl": "http://192.168.1.100:8000/api",
+  "appName": "GEC Student Database Management System",
+  "lanOnly": true,
+  "requestTimeoutMs": 30000,
+  "notes": "College IT Administrator: Set apiBaseUrl to the central college server IP or DNS name. Do not commit local configs with private IP details."
+}

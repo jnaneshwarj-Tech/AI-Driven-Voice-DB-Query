@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../services/api';
+import { getUserMessage } from '../services/errors';
 import { useToast } from './Toast';
+import { useI18n } from '../context/LanguageContext';
+import CountUp from './CountUp';
 import {
   Database, HardDrive, Download, RotateCcw, Trash2, Shield,
   AlertTriangle, CheckCircle, XCircle, Clock, RefreshCw,
@@ -26,14 +29,14 @@ function fmtDate(d) {
 
 function StatusBadge({ status }) {
   const cfg = {
-    verified:  { color: 'bg-emerald-100 text-emerald-700 border-emerald-200', icon: <CheckCircle className="w-3 h-3" /> },
-    success:   { color: 'bg-green-100 text-green-700 border-green-200',       icon: <CheckCircle className="w-3 h-3" /> },
-    running:   { color: 'bg-blue-100 text-blue-700 border-blue-200',          icon: <RefreshCw className="w-3 h-3 animate-spin" /> },
-    failed:    { color: 'bg-red-100 text-red-700 border-red-200',             icon: <XCircle className="w-3 h-3" /> },
+    verified:  { variant: 'badge-ok',   icon: <CheckCircle className="w-3 h-3" aria-hidden="true" /> },
+    success:   { variant: 'badge-ok',   icon: <CheckCircle className="w-3 h-3" aria-hidden="true" /> },
+    running:   { variant: 'badge-info', icon: <RefreshCw className="w-3 h-3 animate-spin" aria-hidden="true" /> },
+    failed:    { variant: 'badge-err',  icon: <XCircle className="w-3 h-3" aria-hidden="true" /> },
   };
   const c = cfg[status] || cfg.failed;
   return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${c.color}`}>
+    <span className={`badge ${c.variant} font-bold`}>
       {c.icon} {status?.toUpperCase()}
     </span>
   );
@@ -41,52 +44,62 @@ function StatusBadge({ status }) {
 
 // ── Confirmation Modal ────────────────────────────────────────────────────────
 function ConfirmModal({ backup, onConfirm, onCancel, loading }) {
+  const { t } = useI18n();
   if (!backup) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-      <div className="bg-white dark:bg-slate-900 border border-red-200 dark:border-red-800/50 rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4">
-        <div className="flex items-center gap-3">
-          <div className="p-2.5 bg-red-100 dark:bg-red-900/30 rounded-xl">
-            <AlertTriangle className="w-6 h-6 text-red-600" />
+    <div className="backdrop" role="dialog" aria-modal="true" aria-labelledby="restore-confirm-title">
+      <div className="modal-panel max-w-md anim-scale-in p-5 sm:p-6">
+        <div className="flex items-start gap-3">
+          <div className="rounded-lg bg-err-soft p-2.5">
+            <AlertTriangle className="w-6 h-6 text-err" aria-hidden="true" />
           </div>
           <div>
-            <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100">Confirm Database Restore</h3>
-            <p className="text-xs text-slate-500">This is a destructive operation</p>
+            <h3 id="restore-confirm-title" className="t-card text-ink">{t('backup.modalHeading')}</h3>
+            <p className="t-support mt-0.5 text-err">{t('backup.modalDanger')}</p>
           </div>
         </div>
 
-        <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/40 rounded-xl p-4 space-y-2 text-sm">
-          <p className="font-semibold text-amber-800 dark:text-amber-300">What will happen:</p>
-          <ul className="text-amber-700 dark:text-amber-400 space-y-1 text-xs list-disc list-inside">
-            <li>A safety backup of the <strong>current database</strong> will be created first</li>
-            <li>The selected backup will be restored</li>
-            <li>All data added <strong>after</strong> the backup date will be lost</li>
-            <li>This action cannot be undone with the normal undo button</li>
+        <div className="mt-4 space-y-1.5 rounded-md border border-warn/25 bg-warn-soft p-4">
+          <p className="t-label font-semibold text-warn">{t('backup.modalWhat')}</p>
+          <ul className="t-support list-disc space-y-1 pl-4 text-ink-soft">
+            <li>
+              {t('backup.modalPoint1Lead')} <strong>{t('backup.modalPoint1Bold')}</strong>{' '}
+              {t('backup.modalPoint1Tail')}
+            </li>
+            <li>{t('backup.modalPoint2')}</li>
+            <li>
+              {t('backup.modalPoint3Lead')} <strong>{t('backup.modalPoint3Bold')}</strong>{' '}
+              {t('backup.modalPoint3Tail')}
+            </li>
+            <li>{t('backup.modalPoint4')}</li>
           </ul>
         </div>
 
-        <div className="bg-slate-50 dark:bg-slate-800 rounded-xl p-3 text-xs space-y-1">
-          <p><strong>Backup:</strong> {backup.backup_name}</p>
-          <p><strong>Created:</strong> {fmtDate(backup.created_at)}</p>
-          <p><strong>Size:</strong> {fmtBytes(backup.size_bytes)}</p>
-          <p><strong>Records:</strong> {backup.record_count?.toLocaleString() || 'Unknown'} students</p>
+        <div className="sunken mt-3 space-y-1 p-3 text-[13px] text-ink-soft">
+          <p><strong className="text-ink">{t('backup.modalBackup')}:</strong> <span className="font-mono">{backup.backup_name}</span></p>
+          <p><strong className="text-ink">{t('backup.modalCreated')}:</strong> {fmtDate(backup.created_at)}</p>
+          <p><strong className="text-ink">{t('backup.modalSize')}:</strong> {fmtBytes(backup.size_bytes)}</p>
+          <p>
+            <strong className="text-ink">{t('backup.modalRecords')}:</strong>{' '}
+            {backup.record_count?.toLocaleString() || t('backup.unknown')} {t('backup.students')}
+          </p>
         </div>
 
-        <div className="flex gap-3 pt-2">
+        <div className="mt-4 flex flex-wrap gap-3 pt-1">
           <button
             onClick={onCancel}
             disabled={loading}
-            className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-sm font-semibold hover:bg-slate-50 dark:hover:bg-slate-800 transition-all disabled:opacity-50"
+            className="btn btn-ghost flex-1"
           >
-            Cancel
+            {t('common.cancel')}
           </button>
           <button
             onClick={onConfirm}
             disabled={loading}
-            className="flex-1 px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-sm font-bold transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+            className="btn btn-danger flex-1"
           >
-            {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
-            {loading ? 'Restoring...' : 'Confirm Restore'}
+            {loading ? <RefreshCw className="w-4 h-4 animate-spin" aria-hidden="true" /> : <RotateCcw className="w-4 h-4" aria-hidden="true" />}
+            {loading ? t('backup.restoring') : t('backup.confirmRestore')}
           </button>
         </div>
       </div>
@@ -96,57 +109,64 @@ function ConfirmModal({ backup, onConfirm, onCancel, loading }) {
 
 // ── Storage Status Widget ─────────────────────────────────────────────────────
 function StorageWidget({ storage }) {
+  const { t } = useI18n();
   if (!storage) return null;
   const diskPct = storage.disk_used_pct || 0;
-  const diskColor = diskPct > 90 ? 'bg-red-500' : diskPct > 75 ? 'bg-amber-500' : 'bg-emerald-500';
+  const diskColor = diskPct > 90 ? 'bg-err' : diskPct > 75 ? 'bg-warn' : 'bg-ok';
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+    <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 stagger">
       {/* DB Size */}
-      <div className="bg-white/70 dark:bg-slate-900/50 border border-slate-200/60 dark:border-slate-800/40 rounded-2xl p-4 space-y-1">
-        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Database Size</p>
-        <p className="text-2xl font-black text-slate-800 dark:text-slate-100 font-mono">
-          {storage.db_size_mb || 0} <span className="text-sm font-semibold text-slate-400">MB</span>
+      <div className="card card-interactive lift relative space-y-1 p-4">
+        <p className="t-support font-semibold uppercase tracking-wider text-ink-mute">{t('backup.dbSize')}</p>
+        <p className="t-value text-ink">
+          <CountUp value={storage.db_size_mb || 0} /> <span className="t-support font-semibold text-ink-mute">MB</span>
         </p>
-        <p className="text-[10px] text-slate-400">Data: {storage.data_size_mb}MB · Index: {storage.index_size_mb}MB</p>
+        <p className="t-support text-ink-faint">
+          {t('backup.dbBreakdown', { data: storage.data_size_mb, index: storage.index_size_mb })}
+        </p>
+        <span className="sheen" aria-hidden="true" />
       </div>
 
       {/* Backup Storage */}
-      <div className="bg-white/70 dark:bg-slate-900/50 border border-slate-200/60 dark:border-slate-800/40 rounded-2xl p-4 space-y-1">
-        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Backup Storage</p>
-        <p className="text-2xl font-black text-slate-800 dark:text-slate-100 font-mono">
-          {storage.backup_storage_mb || 0} <span className="text-sm font-semibold text-slate-400">MB</span>
+      <div className="card card-interactive lift relative space-y-1 p-4">
+        <p className="t-support font-semibold uppercase tracking-wider text-ink-mute">{t('backup.backupStorage')}</p>
+        <p className="t-value text-ink">
+          <CountUp value={storage.backup_storage_mb || 0} /> <span className="t-support font-semibold text-ink-mute">MB</span>
         </p>
-        <p className="text-[10px] text-slate-400">{storage.total_backups || 0} verified backup(s)</p>
+        <p className="t-support text-ink-faint">
+          {t('backup.verifiedBackups', { n: storage.total_backups || 0 })}
+        </p>
+        <span className="sheen" aria-hidden="true" />
       </div>
 
       {/* Disk Usage */}
-      <div className="bg-white/70 dark:bg-slate-900/50 border border-slate-200/60 dark:border-slate-800/40 rounded-2xl p-4 space-y-2 md:col-span-2">
+      <div className="card space-y-2 p-4 sm:col-span-2">
         <div className="flex items-center justify-between">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Disk Usage</p>
-          <span className={`text-xs font-bold ${diskPct > 90 ? 'text-red-600' : diskPct > 75 ? 'text-amber-600' : 'text-emerald-600'}`}>
+          <p className="t-support font-semibold uppercase tracking-wider text-ink-mute">{t('backup.diskUsage')}</p>
+          <span className={`t-support font-bold tabular-nums ${diskPct > 90 ? 'text-err' : diskPct > 75 ? 'text-warn' : 'text-ok'}`}>
             {diskPct}%
           </span>
         </div>
-        <div className="w-full bg-slate-100 dark:bg-slate-800 rounded-full h-2">
+        <div className="h-2 w-full overflow-hidden rounded-full bg-sunken">
           <div
             className={`h-2 rounded-full transition-all duration-700 ${diskColor}`}
             style={{ width: `${Math.min(diskPct, 100)}%` }}
           />
         </div>
-        <div className="flex justify-between text-[10px] text-slate-400">
-          <span>Used: {storage.disk_used_gb} GB</span>
-          <span>Free: {storage.disk_free_gb} GB</span>
-          <span>Total: {storage.disk_total_gb} GB</span>
+        <div className="t-support flex justify-between text-ink-faint">
+          <span>{t('backup.diskUsed', { v: storage.disk_used_gb })}</span>
+          <span>{t('backup.diskFree', { v: storage.disk_free_gb })}</span>
+          <span>{t('backup.diskTotal', { v: storage.disk_total_gb })}</span>
         </div>
       </div>
 
       {/* Warnings */}
       {storage.warnings?.length > 0 && (
-        <div className="md:col-span-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/40 rounded-xl p-3">
+        <div className="space-y-1.5 rounded-md border border-warn/25 bg-warn-soft p-3 sm:col-span-2 lg:col-span-4">
           {storage.warnings.map((w, i) => (
-            <div key={i} className="flex items-center gap-2 text-sm text-amber-700 dark:text-amber-400">
-              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+            <div key={i} className="flex items-start gap-2 text-sm text-warn">
+              <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" aria-hidden="true" />
               {w}
             </div>
           ))}
@@ -170,6 +190,7 @@ export default function BackupRestore({ userRole }) {
   const [activeTab, setActiveTab] = useState('backups');
   const [expandedBackup, setExpandedBackup] = useState(null);
   const { showToast } = useToast();
+  const { t } = useI18n();
 
   const isAdmin = userRole === 'Admin';
 
@@ -206,12 +227,12 @@ export default function BackupRestore({ userRole }) {
     setCreatingBackup(true);
     try {
       const res = await api.post('/backup/create');
-      showToast({ type: 'success', message: res.data.message || 'Backup created successfully!' });
+      showToast({ type: 'success', message: res.data.message || t('backup.createdToast') });
       fetchAll();
     } catch (err) {
       showToast({
         type: 'error',
-        message: err.response?.data?.detail || 'Backup creation failed.'
+        message: getUserMessage(err, t('backup.createFailed'))
       });
     } finally {
       setCreatingBackup(false);
@@ -225,14 +246,14 @@ export default function BackupRestore({ userRole }) {
       const res = await api.post(`/backup/restore/${restoreTarget.id}`, { confirmed: true });
       showToast({
         type: 'success',
-        message: res.data.message || 'Database restored successfully!'
+        message: res.data.message || t('backup.restoredToast')
       });
       setRestoreTarget(null);
       fetchAll();
     } catch (err) {
       showToast({
         type: 'error',
-        message: err.response?.data?.detail || 'Restore failed. Check audit log for details.'
+        message: getUserMessage(err, t('backup.restoreFailed'))
       });
     } finally {
       setRestoring(false);
@@ -240,23 +261,23 @@ export default function BackupRestore({ userRole }) {
   };
 
   const handleDeleteBackup = async (backup) => {
-    if (!window.confirm(`Delete backup "${backup.backup_name}"? This cannot be undone.`)) return;
+    if (!window.confirm(t('backup.deleteConfirm', { name: backup.backup_name }))) return;
     try {
       await api.delete(`/backup/${backup.id}`);
-      showToast({ type: 'success', message: 'Backup deleted.' });
+      showToast({ type: 'success', message: t('backup.deletedToast') });
       fetchAll();
     } catch (err) {
       showToast({
         type: 'error',
-        message: err.response?.data?.detail || 'Delete failed.'
+        message: getUserMessage(err, t('backup.deleteFailed'))
       });
     }
   };
 
   const tabs = [
-    { id: 'backups', label: 'Backup History', icon: <HardDrive className="w-4 h-4" /> },
-    { id: 'uploads', label: 'Upload Versions', icon: <Layers className="w-4 h-4" /> },
-    { id: 'audit', label: 'Audit Log', icon: <Shield className="w-4 h-4" /> },
+    { id: 'backups', label: t('backup.tabHistory'), icon: <HardDrive className="w-4 h-4" aria-hidden="true" /> },
+    { id: 'uploads', label: t('backup.tabUploads'), icon: <Layers className="w-4 h-4" aria-hidden="true" /> },
+    { id: 'audit', label: t('backup.tabAudit'), icon: <Shield className="w-4 h-4" aria-hidden="true" /> },
   ];
 
   return (
@@ -270,35 +291,33 @@ export default function BackupRestore({ userRole }) {
       />
 
       {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
-            <Database className="w-5 h-5 text-blue-600" />
-            Database Reliability &amp; Backup Center
+          <h2 className="t-section flex items-center gap-2 text-ink">
+            <Database className="w-5 h-5 text-brand-fg" aria-hidden="true" />
+            {t('backup.title')}
           </h2>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-            Backup, restore, upload version history, and enterprise audit log.
-          </p>
+          <p className="t-support mt-1 text-ink-mute">{t('backup.subtitle')}</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={fetchAll}
             disabled={loadingBackups}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold rounded-lg hover:bg-slate-50 disabled:opacity-50 transition-all"
+            className="btn btn-ghost btn-sm"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${loadingBackups ? 'animate-spin' : ''}`} />
-            Refresh
+            <RefreshCw className={`w-3.5 h-3.5 ${loadingBackups ? 'animate-spin' : ''}`} aria-hidden="true" />
+            {t('common.refresh')}
           </button>
           {isAdmin && (
             <button
               onClick={handleCreateBackup}
               disabled={creatingBackup}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold rounded-xl transition-all disabled:opacity-50 shadow-sm shadow-blue-500/20"
+              className="btn btn-accent"
             >
               {creatingBackup
-                ? <RefreshCw className="w-4 h-4 animate-spin" />
-                : <Download className="w-4 h-4" />}
-              {creatingBackup ? 'Creating Backup...' : 'Create Backup Now'}
+                ? <RefreshCw className="w-4 h-4 animate-spin" aria-hidden="true" />
+                : <Download className="w-4 h-4" aria-hidden="true" />}
+              {creatingBackup ? t('backup.creating') : t('backup.create')}
             </button>
           )}
         </div>
@@ -306,110 +325,118 @@ export default function BackupRestore({ userRole }) {
 
       {/* Storage Status */}
       {loadingStorage
-        ? <div className="h-24 bg-white/50 dark:bg-slate-900/30 rounded-2xl animate-pulse" />
+        ? <div className="skeleton h-28 w-full" />
         : <StorageWidget storage={storage} />}
 
       {/* Info bar for Staff */}
       {!isAdmin && (
-        <div className="flex items-center gap-2 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800/40 rounded-xl text-sm text-blue-700 dark:text-blue-300">
-          <Info className="w-4 h-4 flex-shrink-0" />
-          Backup creation and restore require Admin access. You can view storage status and upload history.
+        <div className="flex items-start gap-2 rounded-md border border-info/25 bg-info-soft p-3 text-sm text-info">
+          <Info className="w-4 h-4 flex-shrink-0 mt-0.5" aria-hidden="true" />
+          {t('backup.staffNotice')}
         </div>
       )}
 
       {/* Tabs */}
-      <div className="bg-white/80 dark:bg-slate-900/60 backdrop-blur-lg rounded-2xl border border-slate-200/80 dark:border-slate-800/60 shadow-md overflow-hidden">
-        <div className="px-5 py-3 border-b border-slate-100 dark:border-slate-800/60 flex items-center gap-2 bg-slate-50/50 dark:bg-slate-950/20 flex-wrap">
+      <div className="card overflow-hidden">
+        <div
+          role="tablist"
+          className="flex flex-wrap items-center gap-2 border-b border-line bg-sunken px-4 py-2.5"
+        >
           {tabs.filter(t => isAdmin || t.id !== 'backups' || t.id === 'uploads' || t.id === 'audit').map(tab => (
             <button
               key={tab.id}
+              role="tab"
+              aria-selected={activeTab === tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all
+              className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[13px] font-semibold transition-colors
                 ${activeTab === tab.id
-                  ? 'bg-blue-600 text-white shadow-sm'
-                  : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+                  ? 'bg-brand text-white shadow-sm'
+                  : 'text-ink-mute hover:bg-canvas hover:text-ink'}`}
             >
               {tab.icon}{tab.label}
             </button>
           ))}
         </div>
 
-        <div className="p-6">
+        <div className="p-4 sm:p-6">
           {/* ── Backup History Tab ── */}
           {activeTab === 'backups' && isAdmin && (
             loadingBackups ? (
-              <div className="flex items-center justify-center py-16 text-slate-400">
-                <RefreshCw className="w-6 h-6 animate-spin mr-3" />
-                Loading backup history...
+              <div role="status" className="flex items-center justify-center py-16 text-ink-mute gap-3">
+                <RefreshCw className="w-6 h-6 animate-spin" aria-hidden="true" />
+                <span className="t-body">{t('backup.loadingHistory')}</span>
               </div>
             ) : backups.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-20 text-slate-400 gap-3">
-                <HardDrive className="w-12 h-12 text-slate-200 dark:text-slate-700" />
-                <p className="font-bold">No backups yet</p>
-                <p className="text-sm">Click "Create Backup Now" to create the first backup.</p>
+              <div className="empty-state gap-3">
+                <HardDrive className="h-12 w-12 text-ink-faint" aria-hidden="true" />
+                <p className="t-card text-ink-soft">{t('backup.emptyHistory')}</p>
+                <p className="t-support text-ink-mute">{t('backup.emptyHistoryHelp')}</p>
               </div>
             ) : (
               <div className="space-y-3">
                 {backups.map(b => (
                   <div
                     key={b.id}
-                    className="border border-slate-100 dark:border-slate-800/80 rounded-xl overflow-hidden hover:border-slate-200 dark:hover:border-slate-700 transition-all"
+                    className="card overflow-hidden transition-colors hover:border-line-strong"
                   >
-                    <div className="flex flex-wrap items-center justify-between gap-4 p-4 bg-slate-50/40 dark:bg-slate-950/20">
+                    <div className="flex flex-wrap items-center justify-between gap-4 p-4">
                       {/* Left: info */}
-                      <div className="space-y-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
+                      <div className="min-w-0 space-y-1.5">
+                        <div className="flex flex-wrap items-center gap-2">
                           <StatusBadge status={b.status} />
-                          <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
-                            b.backup_type === 'pre_restore' ? 'bg-orange-100 text-orange-700' :
-                            b.backup_type === 'manual' ? 'bg-purple-100 text-purple-700' :
-                            b.backup_type === 'auto_daily' ? 'bg-sky-100 text-sky-700' :
-                            'bg-teal-100 text-teal-700'
+                          <span className={`badge font-bold ${
+                            b.backup_type === 'pre_restore' ? 'badge-warn' :
+                            b.backup_type === 'manual' ? 'badge-brand' :
+                            b.backup_type === 'auto_daily' ? 'badge-info' :
+                            'badge-quiet'
                           }`}>
                             {b.backup_type?.replace('_', ' ').toUpperCase()}
                           </span>
                           {!b.file_exists && (
-                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-600 font-bold">
-                              FILE MISSING
+                            <span className="badge badge-err font-bold uppercase">
+                              {t('backup.fileMissing')}
                             </span>
                           )}
                         </div>
-                        <p className="text-sm font-mono text-slate-700 dark:text-slate-200 truncate max-w-xs">
+                        <p className="text-sm font-mono text-ink-soft truncate max-w-xs" title={b.backup_name}>
                           {b.backup_name}
                         </p>
-                        <div className="flex items-center gap-4 text-[11px] text-slate-400 flex-wrap">
+                        <div className="t-support flex flex-wrap items-center gap-x-4 gap-y-1 text-ink-mute">
                           <span className="flex items-center gap-1">
-                            <Clock className="w-3 h-3" />{fmtDate(b.created_at)}
+                            <Clock className="w-3 h-3" aria-hidden="true" />{fmtDate(b.created_at)}
                           </span>
-                          <span>{fmtBytes(b.size_bytes)}</span>
-                          <span>{b.record_count?.toLocaleString() || 0} students</span>
-                          <span>By: <strong className="text-slate-600 dark:text-slate-300">{b.created_by}</strong></span>
+                          <span className="tabular-nums">{fmtBytes(b.size_bytes)}</span>
+                          <span className="tabular-nums">{b.record_count?.toLocaleString() || 0} {t('backup.students')}</span>
+                          <span>{t('backup.by')}: <strong className="text-ink-soft">{b.created_by}</strong></span>
                         </div>
                       </div>
 
                       {/* Right: actions */}
-                      <div className="flex items-center gap-2 flex-shrink-0">
+                      <div className="flex flex-shrink-0 items-center gap-2">
                         <button
                           onClick={() => setExpandedBackup(expandedBackup === b.id ? null : b.id)}
-                          className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-all"
+                          aria-label={expandedBackup === b.id ? t('backup.hideDetails') : t('backup.showDetails')}
+                          aria-expanded={expandedBackup === b.id}
+                          className="rounded-md p-1.5 text-ink-faint transition-colors hover:bg-canvas hover:text-ink"
                         >
-                          {expandedBackup === b.id ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                          {expandedBackup === b.id ? <ChevronUp className="w-4 h-4" aria-hidden="true" /> : <ChevronDown className="w-4 h-4" aria-hidden="true" />}
                         </button>
                         {b.status !== 'failed' && b.file_exists && (
                           <button
                             onClick={() => setRestoreTarget(b)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500 hover:text-white border border-amber-200 dark:border-amber-800/40 text-amber-600 dark:text-amber-400 text-xs font-bold rounded-lg transition-all"
+                            className="btn btn-danger-soft btn-sm"
                           >
-                            <RotateCcw className="w-3.5 h-3.5" />
-                            Restore
+                            <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
+                            {t('backup.restore')}
                           </button>
                         )}
                         {b.backup_type !== 'pre_restore' && (
                           <button
                             onClick={() => handleDeleteBackup(b)}
-                            className="p-1.5 text-slate-400 hover:text-red-600 dark:hover:text-red-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-all"
+                            aria-label={t('backup.deleteAria')}
+                            className="rounded-md p-1.5 text-ink-faint transition-colors hover:bg-err-soft hover:text-err"
                           >
-                            <Trash2 className="w-4 h-4" />
+                            <Trash2 className="w-4 h-4" aria-hidden="true" />
                           </button>
                         )}
                       </div>
@@ -417,13 +444,13 @@ export default function BackupRestore({ userRole }) {
 
                     {/* Expanded row */}
                     {expandedBackup === b.id && (
-                      <div className="px-4 py-3 border-t border-slate-100 dark:border-slate-800/60 text-xs text-slate-500 space-y-1 bg-white dark:bg-slate-900/40">
+                      <div className="slide-down space-y-1 border-t border-line bg-canvas px-4 py-3 text-[13px] text-ink-mute">
                         {b.error_message && (
-                          <p className="text-red-500"><strong>Error:</strong> {b.error_message}</p>
+                          <p className="text-err"><strong>{t('common.error')}:</strong> {b.error_message}</p>
                         )}
-                        <p><strong>Verified:</strong> {b.verified ? 'Yes ✓' : 'Not verified'}</p>
-                        <p><strong>Completed:</strong> {fmtDate(b.completed_at)}</p>
-                        <p><strong>File:</strong> <span className="font-mono">{b.backup_name}</span></p>
+                        <p><strong className="text-ink-soft">{t('backup.verified')}:</strong> {b.verified ? t('backup.verifiedYes') : t('backup.notVerified')}</p>
+                        <p><strong className="text-ink-soft">{t('backup.completed')}:</strong> {fmtDate(b.completed_at)}</p>
+                        <p><strong className="text-ink-soft">{t('backup.fileLabel')}:</strong> <span className="font-mono">{b.backup_name}</span></p>
                       </div>
                     )}
                   </div>
@@ -435,41 +462,41 @@ export default function BackupRestore({ userRole }) {
           {/* ── Upload Versions Tab ── */}
           {activeTab === 'uploads' && (
             uploadVersions.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-20 text-slate-400 gap-3">
-                <Layers className="w-12 h-12 text-slate-200 dark:text-slate-700" />
-                <p className="font-bold">No upload history yet</p>
-                <p className="text-sm">Upload a file to see version history here.</p>
+              <div className="empty-state gap-3">
+                <Layers className="h-12 w-12 text-ink-faint" aria-hidden="true" />
+                <p className="t-card text-ink-soft">{t('backup.emptyUploads')}</p>
+                <p className="t-support text-ink-mute">{t('backup.emptyUploadsHelp')}</p>
               </div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+              <div className="table-scroll">
+                <table className="w-full t-table">
                   <thead>
-                    <tr className="text-left text-[10px] uppercase tracking-wider text-slate-400 border-b border-slate-100 dark:border-slate-800">
-                      <th className="pb-2 pr-4">File</th>
-                      <th className="pb-2 pr-4">Added</th>
-                      <th className="pb-2 pr-4">Updated</th>
-                      <th className="pb-2 pr-4">Unchanged</th>
-                      <th className="pb-2 pr-4">Marks</th>
-                      <th className="pb-2 pr-4">Skipped</th>
-                      <th className="pb-2 pr-4">Status</th>
-                      <th className="pb-2 pr-4">By</th>
-                      <th className="pb-2">Time</th>
+                    <tr>
+                      <th className="th">{t('backup.colFile')}</th>
+                      <th className="th">{t('backup.colAdded')}</th>
+                      <th className="th">{t('backup.colUpdated')}</th>
+                      <th className="th">{t('backup.colUnchanged')}</th>
+                      <th className="th">{t('backup.colMarks')}</th>
+                      <th className="th">{t('backup.colSkipped')}</th>
+                      <th className="th">{t('common.status')}</th>
+                      <th className="th">{t('backup.colBy')}</th>
+                      <th className="th">{t('backup.colTime')}</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-50 dark:divide-slate-800/60">
+                  <tbody>
                     {uploadVersions.map(v => (
-                      <tr key={v.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-950/20 transition-colors">
-                        <td className="py-2 pr-4 font-mono text-xs text-slate-700 dark:text-slate-300 truncate max-w-[180px]">{v.filename}</td>
-                        <td className="py-2 pr-4 text-emerald-600 font-bold">{v.students_added}</td>
-                        <td className="py-2 pr-4 text-amber-600 font-bold">{v.students_updated}</td>
-                        <td className="py-2 pr-4 text-slate-400">{v.students_unchanged}</td>
-                        <td className="py-2 pr-4 text-blue-600 font-bold">{(v.marks_added || 0) + (v.marks_updated || 0)}</td>
-                        <td className="py-2 pr-4 text-slate-400">{v.skipped_rows}</td>
-                        <td className="py-2 pr-4">
+                      <tr key={v.id} className="tr-hover">
+                        <td className="td font-mono text-xs text-ink-soft t-truncate" title={v.filename}>{v.filename}</td>
+                        <td className="td font-semibold tabular-nums text-ok">{v.students_added}</td>
+                        <td className="td font-semibold tabular-nums text-warn">{v.students_updated}</td>
+                        <td className="td tabular-nums text-ink-mute">{v.students_unchanged}</td>
+                        <td className="td font-semibold tabular-nums text-brand-fg">{(v.marks_added || 0) + (v.marks_updated || 0)}</td>
+                        <td className="td tabular-nums text-ink-mute">{v.skipped_rows}</td>
+                        <td className="td">
                           <StatusBadge status={v.status === 'success' ? 'verified' : v.status} />
                         </td>
-                        <td className="py-2 pr-4 text-slate-500 text-xs">{v.performed_by}</td>
-                        <td className="py-2 text-xs text-slate-400">{fmtDate(v.created_at)}</td>
+                        <td className="td text-xs text-ink-soft">{v.performed_by}</td>
+                        <td className="td whitespace-nowrap text-xs text-ink-mute">{fmtDate(v.created_at)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -481,47 +508,47 @@ export default function BackupRestore({ userRole }) {
           {/* ── Audit Log Tab ── */}
           {activeTab === 'audit' && (
             auditLog.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-20 text-slate-400 gap-3">
-                <Shield className="w-12 h-12 text-slate-200 dark:text-slate-700" />
-                <p className="font-bold">No audit events yet</p>
-                <p className="text-sm">Actions like login, upload, backup will appear here.</p>
+              <div className="empty-state gap-3">
+                <Shield className="h-12 w-12 text-ink-faint" aria-hidden="true" />
+                <p className="t-card text-ink-soft">{t('backup.emptyAudit')}</p>
+                <p className="t-support text-ink-mute">{t('backup.emptyAuditHelp')}</p>
               </div>
             ) : (
-              <div className="space-y-2 max-h-[600px] overflow-y-auto">
+              <div className="max-h-[600px] space-y-2 overflow-y-auto pr-1">
                 {auditLog.map(log => (
                   <div
                     key={log.id}
-                    className={`flex flex-wrap items-start justify-between gap-3 p-3 rounded-xl border text-xs
+                    className={`flex flex-wrap items-start justify-between gap-3 rounded-md border p-3 text-[13px]
                       ${log.success
-                        ? 'bg-slate-50/50 dark:bg-slate-950/20 border-slate-100 dark:border-slate-800/60'
-                        : 'bg-red-50/50 dark:bg-red-900/10 border-red-100 dark:border-red-800/30'}`}
+                        ? 'border-line bg-canvas'
+                        : 'border-err/30 bg-err-soft'}`}
                   >
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
                         {log.success
-                          ? <CheckCircle className="w-3 h-3 text-emerald-500" />
-                          : <XCircle className="w-3 h-3 text-red-500" />}
-                        <span className="font-bold text-slate-700 dark:text-slate-200 uppercase text-[10px] tracking-wider">
+                          ? <CheckCircle className="w-3 h-3 text-ok" aria-hidden="true" />
+                          : <XCircle className="w-3 h-3 text-err" aria-hidden="true" />}
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-ink">
                           {log.action}
                         </span>
                         {log.target_table && (
-                          <span className="text-[9px] px-1.5 py-0.5 bg-slate-100 dark:bg-slate-800 text-slate-500 rounded font-mono">
+                          <span className="badge badge-quiet font-mono">
                             {log.target_table}
                           </span>
                         )}
                       </div>
                       {log.summary && (
-                        <p className="text-slate-600 dark:text-slate-300 text-[11px] leading-relaxed">
+                        <p className="text-ink-soft leading-relaxed">
                           {log.summary}
                         </p>
                       )}
                       {log.error_info && (
-                        <p className="text-red-500 text-[11px]">Error: {log.error_info}</p>
+                        <p className="text-err">{t('common.error')}: {log.error_info}</p>
                       )}
                     </div>
-                    <div className="text-right space-y-1 flex-shrink-0">
-                      <p className="text-slate-500 font-semibold">{log.username} <span className="text-slate-400">({log.role})</span></p>
-                      <p className="text-slate-400">{fmtDate(log.created_at)}</p>
+                    <div className="space-y-1 text-right flex-shrink-0">
+                      <p className="font-semibold text-ink-soft">{log.username} <span className="text-ink-faint">({log.role})</span></p>
+                      <p className="text-ink-faint">{fmtDate(log.created_at)}</p>
                     </div>
                   </div>
                 ))}

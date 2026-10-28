@@ -1,0 +1,136 @@
+/**
+ * English UI strings.
+ *
+ * Flat dotted keys, one per label the frontend owns. kn.js must carry the same
+ * keys — a missing Kannada string falls back to English rather than showing a
+ * raw key, so drift is visible in the UI instead of crashing it.
+ *
+ * Scope: UI chrome only. Student data, USNs, branch codes, API field names and
+ * backend-authored messages are never routed through here.
+ */
+export default {
+  // ── Shared vocabulary ──────────────────────────────────────────────────
+  'common.loading': 'Loading…',
+  'common.pleaseWait': 'Please wait…',
+  'common.cancel': 'Cancel',
+  'common.confirm': 'Confirm',
+  'common.close': 'Close',
+  'common.save': 'Save',
+  'common.saving': 'Saving…',
+  'common.delete': 'Delete',
+  'common.edit': 'Edit',
+  'common.add': 'Add',
+  'common.back': 'Back',
+  'common.next': 'Next',
+  'common.previous': 'Previous',
+  'common.retry': 'Try again',
+  'common.refresh': 'Refresh',
+  'common.search': 'Search',
+  'common.clear': 'Clear',
+  'common.download': 'Download',
+  'common.export': 'Export',
+  'common.print': 'Print',
+  'common.apply': 'Apply',
+  'common.reset': 'Reset',
+  'common.yes': 'Yes',
+  'common.no': 'No',
+  'common.all': 'All',
+  'common.none': 'None',
+  'common.total': 'Total',
+  'common.status': 'Status',
+  'common.actions': 'Actions',
+  'common.message': 'Message',
+  'common.error': 'Error',
+  'common.success': 'Success',
+  'common.warning': 'Warning',
+  'common.records': 'records',
+  'common.noRecords': 'No records found',
+  'common.noServer': 'Failed to connect to the server. Is the backend running?',
+  'common.somethingWrong': 'Something went wrong. Please try again.',
+  'common.showing': 'Showing {from}–{to} of {total}',
+  'common.page': 'Page {page} of {pages}',
+  'common.required': 'Required',
+  'common.optional': 'Optional',
+  'common.select': 'Select…',
+  'common.notFound': 'Nothing to show yet',
+
+  // ── Product / brand ────────────────────────────────────────────────────
+  'brand.name': 'AI Database System',
+  'brand.college': 'Government Engineering College, Mosalehosahalli',
+  'brand.collegeShort': 'GEC Mosalehosahalli',
+  'brand.tagline': 'Student Database ERP',
+  'brand.vtu': 'Visvesvaraya Technological University, Belagavi',
+  'brand.vtuAffiliated': 'VTU Affiliated',
+
+  // ── Login ──────────────────────────────────────────────────────────────
+  'auth.signInHeading': 'AI Database System',
+  'auth.signInSub': 'Sign in to access your college workspace',
+  'auth.username': 'Username',
+  'auth.usernamePlaceholder': 'Enter your registered username',
+  'auth.password': 'Password',
+  'auth.signIn': 'Sign in',
+  'auth.forgot': 'Forgot password?',
+  'auth.registerLink': 'Register',
+  'auth.invalid': 'Invalid username or password.',
+  'auth.needBoth': 'Please enter both username and password.',
+  'auth.loginFailed': 'Login failed. Please try again.',
+
+  // ── Password recovery ─────────────────────────────────────────────────
+  'auth.resetHeading': 'Reset your password',
+  'auth.resetSub': 'Confirm your username and registered email to receive a one-time code.',
+  'auth.registeredEmail': 'Registered email',
+  'auth.emailPlaceholder': 'you@example.com',
+  'auth.emailHelp': 'Enter the email associated with your username',
+  'auth.otpLabel': 'Enter the OTP sent to your email',
+  'auth.otpExpires': 'OTP expires in {time}',
+  'auth.newPassword': 'New password',
+  'auth.confirmPassword': 'Confirm new password',
+  'auth.sendOtp': 'Send OTP',
+  'auth.verifyOtp': 'Verify OTP',
+  'auth.resetPassword': 'Reset password',
+  'auth.resendOtp': 'Resend OTP',
+  'auth.backToSignIn': 'Back to sign in',
+  'auth.requestFailed': 'Unable to request a password reset.',
+  'auth.otpFailed': 'Unable to verify OTP.',
+  'auth.resetFailed': 'Unable to reset password.',
+  'auth.resetSuccess': 'Password reset successful. Please sign in with your new password.',
+  'auth.showPassword': 'Show password',
+  'auth.hidePassword': 'Hide password',
+
+  // ── Theme and language controls ───────────────────────────────────────
+  'theme.ariaGroup': 'Colour theme',
+  'theme.light': 'Light',
+  'theme.dark': 'Dark',
+  'theme.system': 'System',
+  'lang.ariaGroup': 'Interface language',
+  'lang.english': 'English',
+  'lang.kannada': 'ಕನ್ನಡ',
+
+  'auth.noAccount': 'New to the system?',
+  'auth.footnote': 'Access is limited to authorised college staff. Everything shown here is official student data.',
+
+  // ── Registration ──────────────────────────────────────────────────────
+  'register.heading': 'Create an account',
+  'register.sub': 'Set up access for college staff',
+  'register.usernamePlaceholder': 'Choose a unique username',
+  'register.email': 'Email',
+  'register.emailPlaceholder': 'Enter a valid email address',
+  'register.passwordPlaceholder': 'Create a strong password',
+  'register.role': 'Role',
+  'register.roleStaff': 'Staff',
+  'register.roleAdmin': 'Admin',
+  'register.roleHelp': 'Staff can search and update records. Admins also manage backups and fee entries.',
+  'register.submit': 'Register',
+  'register.submitting': 'Registering…',
+  'register.haveAccount': 'Already registered?',
+  'register.successTitle': 'Account created',
+  'register.success': 'Registration successful. You can now sign in with the same credentials.',
+  'register.failed': 'Registration failed. Please check the details.',
+  'register.noServer': 'Failed to connect to the server for registration.',
+
+  // ── Reset-password link flow ──────────────────────────────────────────
+  'reset.heading': 'Set a new password',
+  'reset.sub': 'Use the link from your password reset email',
+  'reset.help': 'At least 6 characters.',
+  'reset.submit': 'Update password',
+};

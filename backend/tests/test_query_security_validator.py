@@ -1,7 +1,13 @@
+import os
+import sys
 import unittest
 from fastapi import HTTPException
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
+
+BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BACKEND not in sys.path:
+    sys.path.insert(0, BACKEND)
 
 from query_security_validator import (
     create_confirmation_token,

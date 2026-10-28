@@ -161,13 +161,21 @@ def login(req: LoginRequest, request: Request = None):
     }
 
 
+from security_middleware import sanitize_input
+
 @router.post("/register")
 def register(req: RegisterRequest):
+    username = sanitize_input(req.username.strip())
+    if not username or len(username) < 3:
+        raise HTTPException(400, "Username must be at least 3 characters long.")
+    if not req.password or len(req.password) < 6:
+        raise HTTPException(400, "Password must be at least 6 characters long.")
+
     email_normalized = req.email.strip().lower()
 
     with db_conn() as conn:
         cur = conn.cursor(dictionary=True)
-        cur.execute("SELECT id FROM users WHERE username=%s", (req.username,))
+        cur.execute("SELECT id FROM users WHERE username=%s", (username,))
         if cur.fetchone():
             cur.close()
             raise HTTPException(400, "Username already registered")
@@ -178,7 +186,7 @@ def register(req: RegisterRequest):
         role = "Staff"
         cur.execute(
             "INSERT INTO users (username, email, password_hash, role) VALUES (%s, %s, %s, %s)",
-            (req.username, email_normalized, get_password_hash(req.password), role)
+            (username, email_normalized, get_password_hash(req.password), role)
         )
         conn.commit()
         cur.close()

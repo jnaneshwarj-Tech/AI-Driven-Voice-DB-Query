@@ -8,44 +8,45 @@
  *   4. "multiple_match" → ambiguity table — user MUST pick by USN
  *
  * Auto-corrected (≥90%) is handled silently upstream in Dashboard.
+ *
+ * Data contract: `message`, `search_term` and every suggestion `name` / `usn`
+ * come from the parser and are rendered verbatim; the object handed to `onYes`
+ * is the untouched suggestion row. Only the surrounding chrome is translated.
  */
 import { useState } from 'react';
 import {
   Search, CheckCircle, XCircle, AlertCircle,
   Users, ChevronRight, AlertTriangle
 } from 'lucide-react';
+import { useI18n } from '../context/LanguageContext';
 
 // ── Score badge ───────────────────────────────────────────────────────────────
+// Thresholds (90 / 75 / 60) are the parser's confidence bands — unchanged.
+// Only the colours they resolve to moved onto tokens.
 function ConfBadge({ score }) {
+  const { t } = useI18n();
   const pct = Math.round((score ?? 0) * 100);
-  const color =
-    pct >= 90 ? '#16a34a' :
-    pct >= 75 ? '#2563eb' :
-    pct >= 60 ? '#d97706' : '#9ca3af';
+  const tone =
+    pct >= 90 ? 'badge-ok' :
+    pct >= 75 ? 'badge-info' :
+    pct >= 60 ? 'badge-warn' : 'badge-quiet';
   return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: 4,
-      fontSize: 11, fontWeight: 700, color,
-      background: color + '18', borderRadius: 6,
-      padding: '1px 7px', border: `1px solid ${color}40`
-    }}>
-      {pct}% match
+    <span className={`badge tabular-nums ${tone}`}>
+      {t('suggest.match', { pct })}
     </span>
   );
 }
 
 // ── No match ─────────────────────────────────────────────────────────────────
 function NoMatch() {
+  const { t } = useI18n();
   return (
-    <div style={{
-      display: 'flex', gap: 10, padding: '14px 16px',
-      background: '#f8fafc', border: '1px solid #e2e8f0',
-      borderRadius: 12, alignItems: 'flex-start'
-    }}>
-      <AlertCircle size={18} color="#94a3b8" style={{ flexShrink: 0, marginTop: 1 }} />
-      <p style={{ margin: 0, fontSize: 13, color: '#64748b', fontWeight: 500 }}>
-        No matching records available.
-      </p>
+    <div
+      role="status"
+      className="flex items-start gap-2.5 rounded-md border border-line bg-sunken p-3.5"
+    >
+      <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-ink-mute" aria-hidden="true" />
+      <p className="t-support font-medium text-ink-mute">{t('suggest.noRecords')}</p>
     </div>
   );
 }
@@ -55,12 +56,10 @@ function Avatar({ name }) {
   const initials = (name || '?')
     .split(' ').slice(0, 2).map(w => w[0]?.toUpperCase() || '').join('');
   return (
-    <div style={{
-      width: 36, height: 36, borderRadius: '50%', flexShrink: 0,
-      background: 'linear-gradient(135deg, #1d4ed8, #4f46e5)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      color: '#fff', fontWeight: 700, fontSize: 12
-    }}>
+    <div
+      aria-hidden="true"
+      className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-brand-mid to-brand text-xs font-bold text-white shadow-sm"
+    >
       {initials}
     </div>
   );
@@ -68,6 +67,7 @@ function Avatar({ name }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 export default function SuggestionPanel({ suggestion, onYes, onNo }) {
+  const { t } = useI18n();
   const [answered, setAnswered] = useState(null); // null | 'yes' | 'no'
 
   if (!suggestion) return null;
@@ -88,29 +88,25 @@ export default function SuggestionPanel({ suggestion, onYes, onNo }) {
   // ── After YES clicked (Did you mean?) ────────────────────────────────────
   if (answered === 'yes') {
     return (
-      <div style={{
-        display: 'flex', gap: 10, padding: '12px 16px',
-        background: '#f0fdf4', border: '1px solid #bbf7d0',
-        borderRadius: 12, alignItems: 'center'
-      }}>
-        <CheckCircle size={16} color="#16a34a" style={{ flexShrink: 0 }} />
-        <p style={{ margin: 0, fontSize: 13, color: '#15803d', fontWeight: 500 }}>
-          Loading data for <strong>{top?.name}</strong>…
+      <div
+        role="status"
+        className="flex flex-wrap items-center gap-2.5 rounded-md border border-ok/40 bg-ok-soft p-3.5"
+      >
+        <CheckCircle className="h-4 w-4 flex-shrink-0 text-ok" aria-hidden="true" />
+        <p className="t-support font-medium text-ink">
+          {t('suggest.loadingBefore')} <strong className="font-bold">{top?.name}</strong> {t('suggest.loadingAfter')}
         </p>
       </div>
     );
   }
 
   // ── Auto-corrected notice (handled upstream, but defensive fallback) ───────
+  // `message` is parser-authored — rendered exactly as received.
   if (auto_corrected) {
     return (
-      <div style={{
-        display: 'flex', gap: 10, padding: '10px 14px',
-        background: '#eff6ff', border: '1px solid #bfdbfe',
-        borderRadius: 12, alignItems: 'center'
-      }}>
-        <Search size={14} color="#3b82f6" style={{ flexShrink: 0 }} />
-        <p style={{ margin: 0, fontSize: 13, color: '#1e40af', fontWeight: 500 }}>{message}</p>
+      <div className="flex flex-wrap items-center gap-2.5 rounded-md border border-info/40 bg-info-soft p-3">
+        <Search className="h-3.5 w-3.5 flex-shrink-0 text-info" aria-hidden="true" />
+        <p className="t-support font-medium text-info">{message}</p>
       </div>
     );
   }
@@ -121,116 +117,82 @@ export default function SuggestionPanel({ suggestion, onYes, onNo }) {
   if (type === 'suggestion') {
     const lines = message.split('\n');
     return (
-      <div style={{
-        borderRadius: 14, border: '2px solid #fbbf24',
-        background: '#fffbeb', overflow: 'hidden', boxShadow: '0 1px 4px #0001'
-      }}>
+      <section
+        aria-label={t('suggest.regionLabel')}
+        className="popover anim-scale-in overflow-hidden border-2 border-accent/50"
+      >
         {/* Header */}
-        <div style={{
-          padding: '10px 16px', background: '#fef3c7',
-          display: 'flex', alignItems: 'center', gap: 8
-        }}>
-          <Search size={14} color="#d97706" />
-          <div>
+        <header className="flex items-start gap-2 bg-accent-soft px-4 py-2.5">
+          <Search className="mt-0.5 h-4 w-4 flex-shrink-0 text-accent-ink" aria-hidden="true" />
+          <div className="min-w-0">
             {lines.map((ln, i) => (
-              <p key={i} style={{
-                margin: 0, fontSize: i === 0 ? 13 : 13,
-                fontWeight: i === 0 ? 600 : 700,
-                color: i === 0 ? '#92400e' : '#78350f'
-              }}>
+              <p
+                key={i}
+                className={`t-support break-words ${i === 0 ? 'font-semibold text-ink' : 'font-bold text-accent-ink'}`}
+              >
                 {ln}
               </p>
             ))}
           </div>
-        </div>
+        </header>
 
         {/* Top match card */}
-        <div style={{
-          padding: '12px 16px', display: 'flex',
-          alignItems: 'center', justifyContent: 'space-between', gap: 12
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+          <div className="flex min-w-0 items-center gap-2.5">
             <Avatar name={top.name} />
-            <div>
-              <p style={{ margin: 0, fontWeight: 700, fontSize: 13, color: '#1e293b' }}>
-                {top.name}
-              </p>
-              <p style={{ margin: '2px 0 0', fontSize: 11, color: '#64748b', fontFamily: 'monospace' }}>
-                {top.usn}
-              </p>
-              <div style={{ marginTop: 4 }}>
+            <div className="min-w-0">
+              <p className="t-body break-words font-semibold text-ink">{top.name}</p>
+              <p className="break-all font-mono text-xs text-ink-mute">{top.usn}</p>
+              <div className="mt-1">
                 <ConfBadge score={top.score} />
               </div>
             </div>
           </div>
 
-          {/* YES / NO buttons */}
-          <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+          {/* YES / NO buttons — gold marks this panel's single next action */}
+          <div className="flex flex-shrink-0 flex-wrap gap-2">
             <button
               id="suggestion-yes-btn"
+              type="button"
               onClick={() => { setAnswered('yes'); onYes && onYes(top); }}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 6,
-                padding: '8px 18px', background: '#16a34a', color: '#fff',
-                border: 'none', borderRadius: 10, fontWeight: 700, fontSize: 13,
-                cursor: 'pointer', boxShadow: '0 2px 6px #16a34a30',
-                transition: 'transform .1s'
-              }}
-              onMouseOver={e => e.currentTarget.style.transform = 'scale(1.04)'}
-              onMouseOut={e => e.currentTarget.style.transform = 'scale(1)'}
+              className="btn btn-sm btn-accent"
             >
-              <CheckCircle size={15} /> YES
+              <CheckCircle className="h-4 w-4" aria-hidden="true" /> {t('common.yes')}
             </button>
             <button
               id="suggestion-no-btn"
+              type="button"
               onClick={() => { setAnswered('no'); onNo && onNo(); }}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 6,
-                padding: '8px 18px', background: '#f1f5f9', color: '#475569',
-                border: '1px solid #e2e8f0', borderRadius: 10,
-                fontWeight: 700, fontSize: 13, cursor: 'pointer',
-                transition: 'transform .1s'
-              }}
-              onMouseOver={e => e.currentTarget.style.transform = 'scale(1.04)'}
-              onMouseOut={e => e.currentTarget.style.transform = 'scale(1)'}
+              className="btn btn-sm btn-ghost"
             >
-              <XCircle size={15} /> NO
+              <XCircle className="h-4 w-4" aria-hidden="true" /> {t('common.no')}
             </button>
           </div>
         </div>
 
         {/* Other candidates */}
         {suggestions.length > 1 && (
-          <div style={{ padding: '0 16px 12px' }}>
-            <p style={{
-              margin: '0 0 6px', fontSize: 10, color: '#94a3b8',
-              fontWeight: 600, textTransform: 'uppercase', letterSpacing: 1
-            }}>
-              Other possible matches
+          <div className="px-4 pb-3">
+            <p className="mb-1.5 flex flex-wrap items-center gap-1 text-xs font-semibold uppercase tracking-wide text-ink-mute">
+              {t('suggest.otherMatches')}
             </p>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <div className="flex flex-wrap gap-1.5">
               {suggestions.slice(1).map((s, i) => (
                 <button
                   key={i}
+                  type="button"
+                  title={s.name}
                   onClick={() => { setAnswered('yes'); onYes && onYes(s); }}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 6,
-                    padding: '5px 12px', background: '#fff',
-                    border: '1px solid #e2e8f0', borderRadius: 8,
-                    fontSize: 12, color: '#374151', fontWeight: 500,
-                    cursor: 'pointer', transition: 'border-color .15s'
-                  }}
-                  onMouseOver={e => e.currentTarget.style.borderColor = '#3b82f6'}
-                  onMouseOut={e => e.currentTarget.style.borderColor = '#e2e8f0'}
+                  className="btn btn-sm btn-ghost max-w-full gap-1.5"
                 >
-                  {s.name}
+                  <span className="t-truncate max-w-[14rem]">{s.name}</span>
                   <ConfBadge score={s.score} />
                 </button>
               ))}
             </div>
           </div>
         )}
-      </div>
+      </section>
     );
   }
 
@@ -239,80 +201,62 @@ export default function SuggestionPanel({ suggestion, onYes, onNo }) {
   // ─────────────────────────────────────────────────────────────────────────
   if (type === 'possible_matches') {
     return (
-      <div style={{
-        borderRadius: 14, border: '2px solid #e0e7ff',
-        background: '#f5f3ff', overflow: 'hidden'
-      }}>
-        <div style={{
-          padding: '10px 16px', background: '#ede9fe',
-          display: 'flex', alignItems: 'center', gap: 8
-        }}>
-          <Search size={14} color="#7c3aed" />
-          <div>
-            <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: '#4c1d95' }}>
-              No exact record found for &ldquo;{search_term}&rdquo;
+      <section
+        aria-label={t('suggest.regionLabel')}
+        className="popover anim-scale-in overflow-hidden"
+      >
+        <header className="flex items-start gap-2 border-b border-line bg-info-soft px-4 py-2.5">
+          <Search className="mt-0.5 h-4 w-4 flex-shrink-0 text-info" aria-hidden="true" />
+          <div className="min-w-0">
+            <p className="t-support break-words font-bold text-info">
+              {t('suggest.noExactFor', { q: search_term })}
             </p>
-            <p style={{ margin: '2px 0 0', fontSize: 12, color: '#6d28d9' }}>
-              Possible matches found. Please select:
+            <p className="t-support break-words text-ink-soft">
+              {t('suggest.possibleSelect')}
             </p>
           </div>
-        </div>
+        </header>
 
-        <div style={{ padding: '8px 12px 12px' }}>
+        <div className="space-y-1.5 p-3">
           {suggestions.map((s, i) => (
-            <div key={i} style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              padding: '10px 12px', margin: '4px 0',
-              background: '#fff', borderRadius: 10,
-              border: '1px solid #ddd6fe', gap: 10
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{
-                  width: 22, height: 22, borderRadius: '50%',
-                  background: '#7c3aed', color: '#fff', fontSize: 11,
-                  fontWeight: 700, display: 'flex', alignItems: 'center',
-                  justifyContent: 'center', flexShrink: 0
-                }}>{i + 1}</span>
-                <div>
-                  <p style={{ margin: 0, fontWeight: 700, fontSize: 13, color: '#1e293b' }}>
+            <div
+              key={i}
+              className="flex flex-wrap items-center justify-between gap-2.5 rounded-md border border-line bg-surface p-2.5 transition-colors hover:border-brand/40 hover:bg-brand/[0.03]"
+            >
+              <div className="flex min-w-0 items-center gap-2.5">
+                <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-brand text-xs font-bold text-white tabular-nums">
+                  {i + 1}
+                </span>
+                <div className="min-w-0">
+                  <p className="t-body break-words font-semibold text-ink" title={s.name}>
                     {s.name}
                   </p>
-                  <p style={{ margin: '1px 0 0', fontSize: 11, color: '#94a3b8', fontFamily: 'monospace' }}>
-                    {s.usn}
-                  </p>
+                  <p className="break-all font-mono text-xs text-ink-mute">{s.usn}</p>
                 </div>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+              <div className="flex flex-shrink-0 items-center gap-2">
                 <ConfBadge score={s.score} />
                 <button
+                  type="button"
                   onClick={() => { onYes && onYes(s); }}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 5,
-                    padding: '6px 14px', background: '#7c3aed', color: '#fff',
-                    border: 'none', borderRadius: 8, fontSize: 12,
-                    fontWeight: 700, cursor: 'pointer'
-                  }}
+                  className="btn btn-sm btn-primary"
                 >
-                  <ChevronRight size={13} /> SELECT
+                  <ChevronRight className="h-4 w-4" aria-hidden="true" /> {t('suggest.select')}
                 </button>
               </div>
             </div>
           ))}
 
           <button
+            type="button"
             onClick={() => { onNo && onNo(); }}
-            style={{
-              marginTop: 8, width: '100%', padding: '8px',
-              background: 'transparent', border: '1px solid #c4b5fd',
-              borderRadius: 8, fontSize: 12, color: '#6d28d9',
-              fontWeight: 600, cursor: 'pointer'
-            }}
+            className="btn btn-sm btn-ghost mt-1 w-full"
           >
-            <XCircle size={13} style={{ verticalAlign: 'middle', marginRight: 4 }} />
-            CANCEL — None of these
+            <XCircle className="h-4 w-4" aria-hidden="true" />
+            {t('suggest.cancelNone')}
           </button>
         </div>
-      </div>
+      </section>
     );
   }
 
@@ -321,90 +265,68 @@ export default function SuggestionPanel({ suggestion, onYes, onNo }) {
   // ─────────────────────────────────────────────────────────────────────────
   if (type === 'multiple_match') {
     return (
-      <div style={{
-        borderRadius: 14, border: '2px solid #fecdd3',
-        background: '#fff1f2', overflow: 'hidden'
-      }}>
-        <div style={{
-          padding: '10px 16px', background: '#ffe4e6',
-          display: 'flex', alignItems: 'center', gap: 8
-        }}>
-          <Users size={16} color="#be123c" />
-          <div>
-            <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: '#881337' }}>
-              Multiple students found with similar name
+      <section
+        aria-label={t('suggest.regionLabel')}
+        className="popover anim-scale-in overflow-hidden"
+      >
+        <header className="flex items-start gap-2 bg-err-soft px-4 py-2.5">
+          <Users className="mt-0.5 h-4 w-4 flex-shrink-0 text-err" aria-hidden="true" />
+          <div className="min-w-0">
+            <p className="t-support break-words font-bold text-err">
+              {t('suggest.multipleTitle')}
             </p>
-            <p style={{ margin: '2px 0 0', fontSize: 12, color: '#be123c' }}>
-              USN is the unique identity. Please choose:
+            <p className="t-support break-words text-ink-soft">
+              {t('suggest.multipleHint')}
             </p>
           </div>
-        </div>
+        </header>
 
-        <div style={{ padding: '8px 12px 12px', overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+        <div className="table-scroll border-y border-line">
+          <table className="w-full border-collapse">
             <thead>
-              <tr style={{ background: '#881337', color: '#fff' }}>
-                <th style={thS}>Select</th>
-                <th style={thS}>USN</th>
-                <th style={thS}>Name</th>
-                <th style={thS}>Match</th>
+              <tr>
+                <th scope="col" className="th">{t('suggest.colSelect')}</th>
+                <th scope="col" className="th">{t('suggest.colUsn')}</th>
+                <th scope="col" className="th">{t('suggest.colName')}</th>
+                <th scope="col" className="th text-center">{t('suggest.colMatch')}</th>
               </tr>
             </thead>
             <tbody>
               {suggestions.map((s, i) => (
-                <tr key={i} style={{ background: i % 2 === 0 ? '#fff' : '#fff1f2' }}>
-                  <td style={{ ...tdS, textAlign: 'center' }}>
+                <tr key={i} className="tr-hover">
+                  <td className="td">
                     <button
+                      type="button"
                       onClick={() => { onYes && onYes(s); }}
-                      style={{
-                        display: 'inline-flex', alignItems: 'center', gap: 5,
-                        padding: '5px 14px', background: '#be123c', color: '#fff',
-                        border: 'none', borderRadius: 7, fontSize: 12,
-                        fontWeight: 700, cursor: 'pointer'
-                      }}
+                      className="btn btn-sm btn-primary"
                     >
-                      <ChevronRight size={13} /> View
+                      <ChevronRight className="h-4 w-4" aria-hidden="true" /> {t('suggest.view')}
                     </button>
                   </td>
-                  <td style={{ ...tdS, fontFamily: 'monospace', fontWeight: 600, color: '#374151' }}>
-                    {s.usn}
-                  </td>
-                  <td style={{ ...tdS, fontWeight: 600, color: '#1e293b' }}>
-                    {s.name}
-                  </td>
-                  <td style={{ ...tdS, textAlign: 'center' }}>
+                  <td className="td break-all font-mono font-semibold text-ink">{s.usn}</td>
+                  <td className="td break-words font-semibold text-ink" title={s.name}>{s.name}</td>
+                  <td className="td text-center">
                     <ConfBadge score={s.score} />
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
+        </div>
 
+        <div className="p-3">
           <button
+            type="button"
             onClick={() => { onNo && onNo(); }}
-            style={{
-              marginTop: 10, width: '100%', padding: '8px',
-              background: 'transparent', border: '1px solid #fecdd3',
-              borderRadius: 8, fontSize: 12, color: '#be123c',
-              fontWeight: 600, cursor: 'pointer'
-            }}
+            className="btn btn-sm btn-ghost w-full"
           >
-            <XCircle size={13} style={{ verticalAlign: 'middle', marginRight: 4 }} />
-            CANCEL
+            <XCircle className="h-4 w-4" aria-hidden="true" />
+            {t('common.cancel')}
           </button>
         </div>
-      </div>
+      </section>
     );
   }
 
   return <NoMatch />;
 }
-
-const thS = {
-  padding: '8px 12px', textAlign: 'left',
-  fontSize: 11, fontWeight: 700, letterSpacing: 0.5,
-  border: '1px solid #fecdd3'
-};
-const tdS = {
-  padding: '7px 12px', border: '1px solid #fecdd3', fontSize: 12
-};

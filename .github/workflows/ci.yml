@@ -1,0 +1,102 @@
+name: CI Pipeline - College Student Database ERP
+
+on:
+  push:
+    branches: [ main, master, 'feature/**', 'fix/**' ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  backend-audit-and-tests:
+    name: Backend Lint, Config & Offline Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install Backend Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+
+      - name: Validate Safe Environment Template
+        run: |
+          test -f .env.example
+          test -f backend/.env.example
+          test -f desktop/config.json.example
+
+      - name: Validate Backend Configuration Startup (Offline Dummy Env)
+        env:
+          SECRET_KEY: ci-placeholder-secret-key-minimum-32-chars-long
+          MYSQL_DB: college_db_test
+          MYSQL_USER: college_user
+          MYSQL_PASSWORD: password123
+          MYSQL_HOST: 127.0.0.1
+          MYSQL_PORT: 3306
+        run: |
+          python -c "import sys; sys.path.insert(0, 'backend'); from config import settings; settings.validate_startup(); print('[OK] Startup validation passed successfully')"
+
+      - name: Run Backend Offline Unit and Security Tests
+        env:
+          SECRET_KEY: ci-placeholder-secret-key-minimum-32-chars-long
+          MYSQL_DB: college_db_test
+          MYSQL_USER: college_user
+        run: |
+          python -m unittest backend/tests/test_query_security_validator.py backend/tests/test_master_phase2_language.py backend/tests/test_intent_field_mapping.py -v
+
+  frontend-build:
+    name: Frontend Build & Asset Verification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: frontend/package.json
+
+      - name: Install Frontend Dependencies
+        working-directory: frontend
+        run: npm install
+
+      - name: Build Frontend for Web and Desktop
+        working-directory: frontend
+        run: npm run build
+
+      - name: Verify Built Assets
+        run: |
+          test -f frontend/dist/index.html
+          echo "Verified frontend/dist/index.html exists."
+
+  desktop-config-check:
+    name: Desktop Packaging Syntax & Environment Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: desktop/package.json
+
+      - name: Validate Desktop Package Configuration
+        working-directory: desktop
+        run: |
+          node -e "const pkg = require('./package.json'); if(!pkg.build || !pkg.main) process.exit(1); console.log('[OK] Desktop package config is valid');"
+
+      - name: Install Desktop Dependencies
+        working-directory: desktop
+        run: npm install

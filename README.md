@@ -390,5 +390,35 @@ python -m unittest discover -s tests -p "test_*.py"
 
 ---
 
+## 💻 Windows Desktop Application & Automated Tooling
+
+The platform includes an **Electron Windows Desktop Client** tailored for staff workstations connected to the College LAN with zero MySQL, Python, or database configuration required on client machines.
+
+For full infrastructure architecture, firewall rules, least-privilege MySQL provisioning, and service installation, see [DEPLOYMENT.md](file:///c:/Users/manoj/Desktop/major/DEPLOYMENT.md).
+
+### Quick PowerShell Scripts
+
+| Script | Purpose | Command |
+|---|---|---|
+| **Environment Check** | Verifies Python 3.10+, Node.js, venv, and directories | `powershell -ExecutionPolicy Bypass -File .\scripts\check-environment.ps1` |
+| **Dev Environment Setup** | Initializes venv, installs all pip and npm packages | `powershell -ExecutionPolicy Bypass -File .\scripts\setup-dev.ps1` |
+| **Run Dev Servers** | Starts backend (port 8000) and frontend (port 5173) | `powershell -ExecutionPolicy Bypass -File .\scripts\run-dev.ps1` |
+| **Desktop Dev Mode** | Launches desktop Electron app with Vite hot-reload | `npm run desktop:dev` |
+| **Desktop Packager** | Compiles frontend and builds Windows desktop app | `powershell -ExecutionPolicy Bypass -File .\scripts\build-desktop.ps1` |
+| **Master Test Suite** | Runs configuration audit, build check, and test battery | `powershell -ExecutionPolicy Bypass -File .\scripts\test-all.ps1` |
+| **Production Backend Deploy** | Audits host and starts production Uvicorn service | `powershell -ExecutionPolicy Bypass -File .\scripts\deploy-backend.ps1 -BindHost 0.0.0.0` |
+
+### Desktop Configuration (`config.json`)
+The desktop client dynamically reads `config.json` next to its executable on launch to connect to the central server:
+```json
+{
+  "apiBaseUrl": "http://192.168.1.100:8000/api",
+  "organizationName": "Government Engineering College Mosalehosahalli, Hassan",
+  "enableDevTools": false
+}
+```
+
+---
+
 ## 📄 License
 This project is developed for college academic administration and student data management. All rights reserved.

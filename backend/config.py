@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     MAIL_FROM: str = ""
     MAIL_FROM_NAME: str = "AI Database Automator"
     FRONTEND_URL: str = "http://localhost:5173"
+    ALLOWED_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000"
 
     # ── OTP / Password Reset Settings ─────────────────────────────────────────
     OTP_EXPIRY_SECONDS: int = 120          # 2 minutes
@@ -72,5 +73,24 @@ class Settings(BaseSettings):
         path = os.path.join(base, self.UPLOAD_DIR)
         os.makedirs(path, exist_ok=True)
         return path
+
+    def validate_startup(self):
+        """
+        Validates required configuration variables safely at startup.
+        Never displays secret values in error messages.
+        """
+        missing = []
+        if not (self.SECRET_KEY and self.SECRET_KEY.strip()):
+            missing.append("SECRET_KEY")
+        if not (self.MYSQL_DB and self.MYSQL_DB.strip()):
+            missing.append("MYSQL_DB")
+        if not (self.MYSQL_USER and self.MYSQL_USER.strip()):
+            missing.append("MYSQL_USER")
+
+        if missing:
+            raise RuntimeError(
+                f"[CONFIG ERROR] Startup failed due to missing required variable(s): {', '.join(missing)}. "
+                f"Please configure them in your backend/.env file (see backend/.env.example)."
+            )
 
 settings = Settings()

@@ -18,7 +18,9 @@ import LifecycleDashboard from '../components/LifecycleDashboard';
 import CombinedStudentView from '../components/CombinedStudentView';
 import ReportModal from '../components/ReportModal';
 import LanguageSelector from '../components/LanguageSelector';
-import { useTheme } from '../context/ThemeContext';
+import ThemeModeToggle from '../components/ThemeModeToggle';
+import LanguageModeToggle from '../components/LanguageModeToggle';
+import { useI18n } from '../context/LanguageContext';
 import { getPlaceholderText, getExampleQueries } from '../utils/kannadaTransliteration';
 import { DeshKannadaProcessor } from '../utils/simpleKannadaInput';
 import {
@@ -27,7 +29,8 @@ import {
   CheckCircle, BarChart2, ShieldAlert, Printer, Search, User, GraduationCap,
   PlusCircle, Trash2, Clock, ChevronRight, RotateCcw, Activity,
   ChevronDown, ChevronUp,
-  Zap, RefreshCw, Moon, Sun, Bell, HardDrive, Languages, MapPin, Upload
+  Zap, RefreshCw, Moon, Sun, Bell, HardDrive, Languages, MapPin, Upload, Menu, X,
+  PanelLeftClose, PanelLeftOpen
 } from 'lucide-react';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -112,7 +115,7 @@ function HighlightMatch({ text, query }) {
     return (
       <span>
         {text.slice(0, idx)}
-        <mark className="bg-yellow-200 text-yellow-900 rounded px-0.5 font-bold not-italic">
+        <mark className="bg-accent-soft text-accent-ink rounded px-0.5 font-bold not-italic">
           {text.slice(idx, idx + q.length)}
         </mark>
         {text.slice(idx + q.length)}
@@ -144,7 +147,7 @@ function HighlightMatch({ text, query }) {
       <span>
         {parts.map((p, i) =>
           p.highlighted
-            ? <mark key={i} className="bg-yellow-200 text-yellow-900 rounded px-0.5 font-bold not-italic">{p.text}</mark>
+            ? <mark key={i} className="bg-accent-soft text-accent-ink rounded px-0.5 font-bold not-italic">{p.text}</mark>
             : <span key={i}>{p.text}</span>
         )}
       </span>
@@ -155,16 +158,17 @@ function HighlightMatch({ text, query }) {
 
 // Match type badge colors
 const MATCH_BADGE = {
-  exact:    { label: 'EXACT',    cls: 'bg-green-100 text-green-700' },
-  prefix:   { label: 'PREFIX',   cls: 'bg-blue-100 text-blue-700' },
-  fuzzy:    { label: 'FUZZY',    cls: 'bg-amber-100 text-amber-700' },
-  phonetic: { label: 'PHONETIC', cls: 'bg-purple-100 text-purple-700' },
+  exact:    { label: 'EXACT',    cls: 'bg-ok-soft text-ok' },
+  prefix:   { label: 'PREFIX',   cls: 'bg-info-soft text-info' },
+  fuzzy:    { label: 'FUZZY',    cls: 'bg-warn-soft text-warn' },
+  phonetic: { label: 'PHONETIC', cls: 'bg-brand/10 text-brand-fg' },
 };
 
 // ── Generic Table ─────────────────────────────────────────────────────────────
 export const rowSelectionKey = (r, i) => String(r.usn || r.name || `row-${i}`);
 
 function GenericTable({ data, responseLanguage = 'english', onViewRows, selection, onToggleRow, onToggleAll }) {
+  const { t } = useI18n();
   const [search, setSearch] = useState('');
   const [sortCol, setSortCol] = useState(null);
   const [sortDir, setSortDir] = useState('asc');
@@ -220,59 +224,88 @@ function GenericTable({ data, responseLanguage = 'english', onViewRows, selectio
 
   return (
     <div>
-      <div className="flex items-center gap-3 mb-3">
-        <input value={search} onChange={e => { setSearch(e.target.value); setPage(1); }}
-          placeholder="Search results..." className="flex-1 px-3 py-1.5 text-sm border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-blue-400" />
-        <span className="text-xs text-slate-400">{filtered.length} rows</span>
+      <div className="flex flex-wrap items-center gap-3 mb-3">
+        <label className="sr-only" htmlFor="generic-table-search">{t('table.searchLabel')}</label>
+        <input
+          id="generic-table-search"
+          value={search}
+          onChange={e => { setSearch(e.target.value); setPage(1); }}
+          placeholder={t('table.search')}
+          className="input flex-1 min-w-[10rem] max-w-md"
+        />
+        <span className="t-support text-ink-mute tabular-nums flex-shrink-0">{t('table.rows', { n: filtered.length })}</span>
       </div>
-      <div className="overflow-x-auto rounded-xl border border-slate-200">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50 border-b border-slate-200">
-            <tr>
-              {selectable && (
-                <th className="px-3 py-2.5 w-9">
-                  <input type="checkbox" checked={allPageChecked}
-                    onChange={e => onToggleAll(pageKeys, paged, e.target.checked)}
-                    className="rounded border-slate-300" title="Select all rows on this page" />
-                </th>
-              )}
-              {headers.map(h => (
-                <th key={h} onClick={() => toggleSort(h)}
-                  className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer hover:bg-slate-100 whitespace-nowrap select-none">
-                  {(responseLanguage === 'kannada' ? kannadaHeaders[h] : null) || h.replace(/_/g, ' ')} {sortCol === h ? (sortDir === 'asc' ? '↑' : '↓') : ''}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {paged.map((row, i) => {
-              const key = rowSelectionKey(row, (page - 1) * PAGE_SIZE + i);
-              return (
-              <tr key={key} className={selection?.[key] ? 'bg-indigo-50/60' : 'hover:bg-blue-50/30 transition-colors'}>
+      <div className="table-wrap">
+        <div className="table-scroll">
+          <table className="w-full">
+            <thead>
+              <tr>
                 {selectable && (
-                  <td className="px-3 py-2.5">
-                    <input type="checkbox" checked={!!selection?.[key]}
-                      onChange={() => onToggleRow(key, row)} className="rounded border-slate-300" />
-                  </td>
+                  <th scope="col" className="th w-10 text-center">
+                    <input type="checkbox" checked={allPageChecked}
+                      onChange={e => onToggleAll(pageKeys, paged, e.target.checked)}
+                      className="rounded border-line-strong accent-brand"
+                      aria-label={t('table.selectAll')} title={t('table.selectAll')} />
+                  </th>
                 )}
                 {headers.map(h => (
-                  <td key={h} className="px-4 py-2.5 text-slate-700 whitespace-nowrap">
-                    {row[h] !== null && row[h] !== undefined ? String(row[h]) : <span className="text-slate-300">—</span>}
-                  </td>
+                  <th
+                    key={h}
+                    scope="col"
+                    onClick={() => toggleSort(h)}
+                    tabIndex={0}
+                    role="columnheader"
+                    aria-sort={sortCol === h ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSort(h); }
+                    }}
+                    className="th cursor-pointer select-none hover:bg-line/70"
+                    title={t('table.sortHint')}
+                  >
+                    {(responseLanguage === 'kannada' ? kannadaHeaders[h] : null) || h.replace(/_/g, ' ')}
+                    <span className="ml-1 text-accent-ink" aria-hidden="true">
+                      {sortCol === h ? (sortDir === 'asc' ? '↑' : '↓') : ''}
+                    </span>
+                  </th>
                 ))}
               </tr>
-              );
-            })}
-          </tbody>
-        </table>
+            </thead>
+            {/* Remounting the body on page/sort change replays the row cascade,
+                so a reorder reads as a transition instead of an instant
+                reshuffle. Rows are stateless (selection is prop-driven), so
+                this is safe. */}
+            <tbody key={`${page}|${sortCol}|${sortDir}`} className="rows-in">
+              {paged.map((row, i) => {
+                const key = rowSelectionKey(row, (page - 1) * PAGE_SIZE + i);
+                return (
+                <tr key={key} className={`tr-hover ${selection?.[key] ? 'bg-brand/[0.06]' : ''}`}>
+                  {selectable && (
+                    <td className="td text-center">
+                      <input type="checkbox" checked={!!selection?.[key]}
+                        onChange={() => onToggleRow(key, row)}
+                        className="rounded border-line-strong accent-brand"
+                        aria-label={t('table.selectRow', { key })} />
+                    </td>
+                  )}
+                  {headers.map(h => (
+                    <td key={h} className="td">
+                      {row[h] !== null && row[h] !== undefined ? String(row[h]) : <span className="text-ink-faint">—</span>}
+                    </td>
+                  ))}
+                </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
       {totalPages > 1 && (
-        <div className="flex items-center justify-center gap-2 mt-3">
+        <div className="flex flex-wrap items-center justify-center gap-2 mt-3">
           <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
-            className="px-3 py-1 text-xs rounded-lg border border-slate-200 disabled:opacity-40 hover:bg-slate-50">Prev</button>
-          <span className="text-xs text-slate-500">Page {page} of {totalPages}</span>
+            className="btn btn-sm btn-ghost">{t('table.prev')}</button>
+          <span className="t-support text-ink-mute tabular-nums">{t('table.pageOf', { page, total: totalPages })}</span>
           <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}
-            className="px-3 py-1 text-xs rounded-lg border border-slate-200 disabled:opacity-40 hover:bg-slate-50">Next</button>
+            className="btn btn-sm btn-ghost">{t('table.next')}</button>
         </div>
       )}
     </div>
@@ -307,41 +340,41 @@ function RestorePanel({ showToast, onRestored }) {
       onRestored?.();
       load();
     } catch (e) {
-      showToast({ type: 'error', message: e.response?.data?.detail || 'Restore failed.' });
+      showToast({ type: 'error', message: getUserMessage(e, 'Restore failed.') });
     } finally {
       setRestoring(null);
     }
   };
 
   if (loading) return (
-    <div className="flex items-center justify-center py-16 text-slate-400 gap-2">
-      <div className="w-5 h-5 border-2 border-slate-300 border-t-blue-500 rounded-full animate-spin" />
-      Loading deleted records...
+    <div role="status" aria-live="polite" className="flex items-center justify-center py-16 text-ink-mute gap-3">
+      <div className="no-transition w-5 h-5 border-2 border-line border-t-brand rounded-full animate-spin" />
+      <span className="t-body">{t('undo.loading')}</span>
     </div>
   );
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-base font-bold text-slate-800">Restore Deleted Students</h2>
-          <p className="text-xs text-slate-500 mt-0.5">Students deleted in the last 5 minutes can be restored.</p>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="t-card text-ink">{t('undo.title')}</h2>
+          <p className="t-support text-ink-mute mt-0.5">{t('undo.subtitle')}</p>
         </div>
-        <button onClick={load} className="p-2 hover:bg-slate-100 rounded-lg transition-colors" title="Refresh">
-          <RefreshCw className="w-4 h-4 text-slate-500" />
+        <button onClick={load} className="btn btn-sm btn-ghost flex-shrink-0" aria-label={t('undo.refresh')} title={t('undo.refresh')}>
+          <RefreshCw className="w-4 h-4" />
         </button>
       </div>
 
       {deleted.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-16 text-slate-400 gap-3">
-          <div className="w-12 h-12 rounded-full bg-green-50 flex items-center justify-center">
-            <CheckCircle className="w-6 h-6 text-green-400" />
+        <div className="card empty-state">
+          <div className="w-12 h-12 rounded-full bg-ok-soft flex items-center justify-center">
+            <CheckCircle className="w-6 h-6 text-ok" />
           </div>
-          <p className="text-sm font-medium">No recently deleted students</p>
-          <p className="text-xs">Deleted students appear here for 5 minutes after deletion.</p>
+          <p className="t-card text-ink">{t('undo.emptyTitle')}</p>
+          <p className="t-support">{t('undo.emptyBody')}</p>
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-3 stagger">
           {deleted.map((rec) => {
             const isRestored = rec.restored === 1;
             const isRestoring = restoring === rec.restore_token;
@@ -350,31 +383,36 @@ function RestorePanel({ showToast, onRestored }) {
 
             return (
               <div key={rec.id}
-                className={`bg-white rounded-xl border p-4 flex items-center gap-4 transition-all
-                  ${isRestored ? 'opacity-50 border-slate-200' : expired ? 'border-slate-200 opacity-60' : 'border-red-200 shadow-sm'}`}
+                className={`card p-4 flex items-center gap-4 flex-wrap
+                  ${isRestored ? 'opacity-60' : expired ? 'opacity-70' : 'border-err/30'}`}
               >
                 {/* Avatar */}
                 <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm flex-shrink-0
-                  ${isRestored ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
+                  ${isRestored ? 'bg-ok-soft text-ok' : 'bg-err-soft text-err'}`}>
                   {(rec.student_name || rec.usn || '?').charAt(0).toUpperCase()}
                 </div>
 
                 {/* Info */}
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-slate-800 truncate">{rec.student_name || '—'}</p>
-                  <p className="text-[11px] text-slate-400 font-mono">{rec.usn}</p>
-                  <div className="flex items-center gap-3 mt-1 text-[10px] text-slate-400">
-                    <span>Deleted by: <span className="font-medium text-slate-600">{rec.deleted_by}</span></span>
-                    <span className="flex items-center gap-0.5">
-                      <Clock className="w-2.5 h-2.5" />
+                <div className="flex-1 min-w-[12rem]">
+                  <p className="t-body font-semibold text-ink t-truncate" title={rec.student_name || ''}>{rec.student_name || '—'}</p>
+                  <p className="t-support text-ink-mute font-mono t-truncate" title={rec.usn || ''}>{rec.usn}</p>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-[12px] text-ink-mute">
+                    <span>{t('undo.deletedBy')} <span className="font-medium text-ink-soft">{rec.deleted_by}</span></span>
+                    <span className="flex items-center gap-1">
+                      <Clock className="w-3 h-3" />
                       {new Date(rec.deleted_at).toLocaleTimeString()}
                     </span>
                   </div>
                   {/* Countdown */}
                   {!isRestored && !expired && (
-                    <div className="mt-1.5 h-1 bg-slate-100 rounded-full w-32">
+                    <div
+                      className="mt-2 h-1 bg-sunken rounded-full w-32 overflow-hidden"
+                      role="progressbar"
+                      aria-label={t('undo.window')}
+                      aria-valuenow={secondsLeft}
+                    >
                       <div
-                        className="h-1 bg-amber-400 rounded-full transition-all duration-1000"
+                        className="h-1 bg-warn rounded-full transition-all duration-1000"
                         style={{ width: `${Math.min(100, (secondsLeft / 30) * 100)}%` }}
                       />
                     </div>
@@ -384,19 +422,19 @@ function RestorePanel({ showToast, onRestored }) {
                 {/* Action */}
                 <div className="flex-shrink-0">
                   {isRestored ? (
-                    <span className="flex items-center gap-1 text-xs text-green-600 font-semibold">
-                      <CheckCircle className="w-3.5 h-3.5" /> Restored
+                    <span className="flex items-center gap-1.5 t-support text-ok font-semibold">
+                      <CheckCircle className="w-4 h-4" /> {t('undo.restored')}
                     </span>
                   ) : expired ? (
-                    <span className="text-xs text-slate-400">Window expired</span>
+                    <span className="t-support text-ink-mute">{t('undo.expired')}</span>
                   ) : (
                     <button
                       onClick={() => handleRestore(rec)}
                       disabled={isRestoring}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold rounded-lg transition-colors disabled:opacity-50"
+                      className="btn btn-sm btn-primary"
                     >
-                      <RotateCcw className={`w-3 h-3 ${isRestoring ? 'animate-spin' : ''}`} />
-                      {isRestoring ? 'Restoring...' : 'Restore'}
+                      <RotateCcw className={`w-3.5 h-3.5 ${isRestoring ? 'animate-spin' : ''}`} />
+                      {isRestoring ? t('undo.restoring') : t('undo.restore')}
                     </button>
                   )}
                 </div>
@@ -413,7 +451,13 @@ function RestorePanel({ showToast, onRestored }) {
 export default function Dashboard() {
   const navigate = useNavigate();
   const { showToast } = useToast();
-  const { darkMode, toggleDark, theme, setTheme } = useTheme();
+  const { t } = useI18n();
+  const [navOpen, setNavOpen] = useState(false);
+  // Desktop rail: the sidebar can collapse to icons. Local-only preference —
+  // it changes nothing about which screens and actions each role can reach.
+  const [navCollapsed, setNavCollapsed] = useState(() => localStorage.getItem('navCollapsed') === '1');
+  useEffect(() => { localStorage.setItem('navCollapsed', navCollapsed ? '1' : '0'); }, [navCollapsed]);
+  const [hasCampusPhoto, setHasCampusPhoto] = useState(false);
   const [role]     = useState(() => localStorage.getItem('role') || '');
   const [username] = useState(() => localStorage.getItem('username') || '');
   const [query, setQuery]           = useState('');
@@ -469,6 +513,29 @@ export default function Dashboard() {
       return;
     }
     fetchHistory();
+  }, []);
+
+  // §6 — the campus photograph is an operator-supplied asset
+  // (frontend/public/college-photo.jpg). It is probed before use so a missing
+  // file degrades to the CSS treatment instead of a broken background.
+  useEffect(() => {
+    const img = new Image();
+    img.onload = () => setHasCampusPhoto(true);
+    img.onerror = () => setHasCampusPhoto(false);
+    img.src = '/college-photo.jpg';
+    return () => {
+      img.onload = null;
+      img.onerror = null;
+    };
+  }, []);
+
+  // The mobile drawer is a presentation layer: Escape dismisses it.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') setNavOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, []);
 
   const fetchHistory = async () => {
@@ -531,15 +598,20 @@ export default function Dashboard() {
     // Debounce: 200ms for short inputs, 300ms for longer
     const delay = searchTerm.length <= 3 ? 200 : 300;
 
+    let alive = true;
     const timer = setTimeout(async () => {
       try {
         const res = await api.get(`/query/suggest?q=${encodeURIComponent(searchTerm)}`);
+        // A response that lands after the query was submitted or rewritten must
+        // not open a panel over results it no longer describes.
+        if (!alive) return;
         const suggestions = res.data || [];
+        const open = suggestions.length > 0 && !selectionLocked.current;
         setLiveSuggestions(suggestions);
         setLiveSearchTerm(searchTerm);
         setActiveSuggestion(-1);
-        setShowLiveDropdown(suggestions.length > 0);
-        if (suggestions.length > 0) {
+        setShowLiveDropdown(open);
+        if (open) {
           setNoMatchMsg('');
           setError('');
         }
@@ -548,7 +620,7 @@ export default function Dashboard() {
       }
     }, delay);
 
-    return () => clearTimeout(timer);
+    return () => { alive = false; clearTimeout(timer); };
   }, [query]);
 
   // ── Click-outside: close dropdown when clicking outside the query box ────────
@@ -792,7 +864,7 @@ export default function Dashboard() {
     } catch (err) {
       const isCurrentRequest = searchRequestRef.current.id === requestId;
       const wasAborted = err.code === 'ERR_CANCELED' || err.name === 'CanceledError';
-      if (isCurrentRequest && !wasAborted) setError(err.response?.data?.detail || 'Query failed.');
+      if (isCurrentRequest && !wasAborted) setError(getUserMessage(err, 'Query failed.'));
     } finally {
       if (searchRequestRef.current.id === requestId) {
         searchRequestRef.current = { id: requestId, controller: null, query: null };
@@ -808,6 +880,9 @@ export default function Dashboard() {
     if (!submittedQuery) return;
     setShowLiveDropdown(false);
     setActiveSuggestion(-1);
+    // Hold suggestions closed until the text changes again, so a suggestion
+    // response still in flight can't pop up over the results it was typed for.
+    selectionLocked.current = true;
     await runQuerySearch(submittedQuery, selectedLanguage);
   };
 
@@ -1050,74 +1125,155 @@ export default function Dashboard() {
   // Track response language for Kannada label support
   const responseLanguage = results?.response_language || 'english';
 
+  // §7 — department identity. The department is read from the rows the backend
+  // already returned; nothing is hardcoded and no query changes. A stable hash
+  // of the branch code selects one of six tints, so each department reads as a
+  // distinct room without maintaining a branch→colour table. All six are muted,
+  // low-chroma naturals drawn from the same family as the two themes (forest,
+  // teal, slate, champagne, sage, clay) — they stay readable at 12% alpha over
+  // both an ivory and a midnight ground instead of turning the app into a
+  // different primary colour per screen.
+  const deptName = (() => {
+    const row = data?.[0];
+    if (!row) return '';
+    const key = Object.keys(row).find((k) => /^(branch|department|dept)$/i.test(k));
+    return key ? String(row[key] ?? '').trim() : '';
+  })();
+  const DEPT_RAMPS = ['36 52 75', '216 189 138', '182 106 69', '60 84 118', '175 140 95', '140 85 60'];
+  const deptRgb = deptName
+    ? DEPT_RAMPS[[...deptName.toLowerCase()].reduce((a, c) => (a * 31 + c.charCodeAt(0)) % 997, 7) % DEPT_RAMPS.length]
+    : null;
+  const deptStyle = deptRgb ? { '--dept-a': deptRgb, '--dept-b': deptRgb } : undefined;
+
   return (
-    <div className="flex h-screen bg-slate-50 overflow-hidden">
+    <div className="flex h-screen bg-canvas overflow-hidden">
       {/* Hidden print area */}
       <div style={{ display: 'none' }} ref={printRef}>
         <PrintReport data={data} username={username} role={role} query={results?._query || ''} />
       </div>
 
-      {/* ── Sidebar ── */}
-      <div className="w-64 bg-slate-900 text-white flex flex-col shadow-2xl z-20 flex-shrink-0">
+      {/* ── Sidebar / mobile drawer ── */}
+      {navOpen && (
+        <div
+          className="anim-fade-in fixed inset-0 z-30 bg-brand-deep/60 backdrop-blur-[2px] lg:hidden no-print"
+          onClick={() => setNavOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+      <aside
+        aria-label={t('nav.ariaMain')}
+        className={`nav-shell bg-nav text-nav-fg flex flex-col shadow-2xl flex-shrink-0
+          fixed inset-y-0 left-0 z-40
+          ${navCollapsed ? 'w-[4.5rem]' : 'w-64'}
+          lg:static lg:translate-x-0 lg:z-20
+          ${navOpen ? 'translate-x-0' : '-translate-x-full'}`}
+      >
         {/* Sidebar header */}
-        <div className="p-4 flex items-center gap-3 border-b border-slate-800">
-          <div className="w-8 h-8 bg-blue-600 rounded-xl flex items-center justify-center flex-shrink-0">
-            <Database className="w-4 h-4 text-white" />
+        <div className={`p-4 flex items-center gap-3 border-b border-nav-line ${navCollapsed ? 'justify-center gap-0' : ''}`}>
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-b from-brand-mid to-brand-deep ring-1 ring-white/10 flex items-center justify-center flex-shrink-0">
+            <Database className="w-4 h-4 text-accent" />
           </div>
-          <div className="flex-1 min-w-0">
-            <h1 className="font-bold text-sm">AI Student DB</h1>
-            <p className="text-[10px] text-slate-400">MySQL · v3.0</p>
+          <div className={`flex-1 min-w-0 ${navCollapsed ? 'hidden' : ''}`}>
+            <h1 className="font-bold text-sm text-nav-fg t-truncate">{t('nav.brand')}</h1>
+            <p className="text-[11px] text-nav-fg-mute t-truncate">{t('nav.brandSub')}</p>
           </div>
           <button
-            onClick={toggleDark}
-            className="p-1.5 rounded-lg hover:bg-slate-700 transition-colors flex-shrink-0"
-            title={`Theme: ${theme ? theme.toUpperCase() : 'SYSTEM'} (Click to toggle)`}
+            type="button"
+            onClick={() => setNavOpen(false)}
+            className="lg:hidden p-1.5 rounded-md text-nav-fg-mute hover:text-nav-fg hover:bg-white/10 flex-shrink-0"
+            aria-label={t('nav.close')}
           >
-            {theme === 'light' && <Sun className="w-3.5 h-3.5 text-amber-400" />}
-            {theme === 'dark' && <Moon className="w-3.5 h-3.5 text-blue-400" />}
-            {theme === 'system' && <Zap className="w-3.5 h-3.5 text-purple-400" />}
+            <X className="w-4 h-4" />
           </button>
         </div>
 
-        <div className="p-3 border-b border-slate-800 bg-slate-800/50">
-          <span className="text-[10px] text-slate-500 uppercase font-semibold">Logged in as</span>
-          <p className="text-sm text-slate-200 font-medium truncate">{username || 'User'}</p>
-          <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-500/20 text-blue-400 border border-blue-500/20">{role}</span>
+        {/* Appearance (§4) and interface language (§5) — available on every surface.
+            In the icon rail they collapse to single cycling buttons so the rail
+            never hides a control the expanded sidebar offers. */}
+        <div className={`px-3 py-3 space-y-2 border-b border-nav-line ${navCollapsed ? 'px-2 flex flex-col items-center space-y-1.5' : ''}`}>
+          <LanguageModeToggle variant="onNav" compact={navCollapsed} className="w-full justify-center" />
+          <ThemeModeToggle variant="onNav" compact={navCollapsed} className="w-full justify-center" />
         </div>
 
-        {/* Nav tabs */}
-        <div className="p-2 border-b border-slate-800 space-y-1">
+        {/* Account: full card when there is room, an initial when there is not. */}
+        <div className={`px-3 py-3 border-b border-nav-line bg-white/[0.04] ${navCollapsed ? 'flex justify-center px-2' : ''}`}>
+          {navCollapsed ? (
+            <span
+              className="w-8 h-8 rounded-full bg-white/10 border border-white/10 flex items-center justify-center text-[12px] font-bold text-accent uppercase"
+              title={`${username || 'User'} · ${String(role).toLowerCase() === 'admin' ? t('nav.roleAdmin') : String(role).toLowerCase() === 'staff' ? t('nav.roleStaff') : role}`}
+            >
+              {(username || 'U').slice(0, 1)}
+            </span>
+          ) : (
+            <>
+              <span className="text-[11px] text-nav-fg-mute uppercase tracking-wider font-semibold">{t('nav.loggedInAs')}</span>
+              <p className="text-sm text-nav-fg font-medium t-truncate" title={username || 'User'}>{username || 'User'}</p>
+              <span className="inline-flex items-center mt-1 px-2 py-0.5 rounded-md text-[11px] font-bold uppercase bg-white/10 text-accent border border-white/10">
+                {String(role).toLowerCase() === 'admin' ? t('nav.roleAdmin')
+                  : String(role).toLowerCase() === 'staff' ? t('nav.roleStaff')
+                  : role}
+              </span>
+            </>
+          )}
+        </div>
+
+        {/* Nav — grouped into a workspace, the record tools and the oversight
+            screens, so the rail reads as a place rather than a list of seven
+            identical buttons. Same destinations, same permissions, same order
+            of access; only the grouping and the type size changed. */}
+        <nav className={`py-2 border-b border-nav-line ${navCollapsed ? 'px-1.5' : 'px-2'}`}>
           {[
-            ['query',      <Send className="w-3.5 h-3.5" />,      'Query Engine'],
-            ['files',      <Upload className="w-3.5 h-3.5" />,    'Files / Uploads'],
-            ['backup',     <HardDrive className="w-3.5 h-3.5" />, 'Database & Backup'],
-            ['analytics',  <BarChart2 className="w-3.5 h-3.5" />, 'Analytics'],
-            ['validation', <ShieldAlert className="w-3.5 h-3.5" />,'Validation'],
-            ['lifecycle',  <GraduationCap className="w-3.5 h-3.5" />, 'Student Lifecycle'],
-            ['activity',   <Activity className="w-3.5 h-3.5" />,   'Activity Logs'],
-          ].map(([tab, icon, label]) => (
-            <button key={tab} onClick={() => setActiveTab(tab)}
-              className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors
-                ${activeTab === tab
-                  ? 'bg-blue-600 text-white shadow-sm shadow-blue-500/30'
-                  : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
-              {icon} {label}
-            </button>
+            ['nav.groupWorkspace', [
+              ['query',     <Send className="w-[17px] h-[17px]" aria-hidden="true" />,              'nav.query'],
+              ['analytics', <BarChart2 className="w-[17px] h-[17px]" aria-hidden="true" />,         'nav.analytics'],
+            ]],
+            ['nav.groupRecords', [
+              ['files',     <Upload className="w-[17px] h-[17px]" aria-hidden="true" />,            'nav.files'],
+              ['lifecycle', <GraduationCap className="w-[17px] h-[17px]" aria-hidden="true" />,     'nav.lifecycle'],
+            ]],
+            ['nav.groupOversight', [
+              ['validation', <ShieldAlert className="w-[17px] h-[17px]" aria-hidden="true" />,      'nav.validation'],
+              ['activity',   <Activity className="w-[17px] h-[17px]" aria-hidden="true" />,         'nav.activity'],
+              ['backup',     <HardDrive className="w-[17px] h-[17px]" aria-hidden="true" />,        'nav.backup'],
+            ]],
+          ].map(([groupKey, items], gi) => (
+            <div key={groupKey}>
+              {navCollapsed
+                ? (gi > 0 && <div className="mx-2 my-2 h-px bg-white/10" aria-hidden="true" />)
+                : <p className="nav-group-label">{t(groupKey)}</p>}
+              <div className="space-y-1">
+                {items.map(([tab, icon, key]) => (
+                  <button key={tab}
+                    onClick={() => { setActiveTab(tab); setNavOpen(false); }}
+                    aria-current={activeTab === tab ? 'page' : undefined}
+                    aria-label={t(key)}
+                    data-active={activeTab === tab}
+                    title={t(key)}
+                    className={`nav-item ${navCollapsed ? 'is-compact' : ''}`}>
+                    <span className="nav-item__icon">{icon}</span>
+                    <span className={`nav-item__label ${navCollapsed ? 'hidden' : ''}`}>{t(key)}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
           ))}
-        </div>
+        </nav>
 
-        {/* History */}
-        <div className="flex-1 overflow-y-auto p-3 space-y-4">
+        {/* History + recent activity. The icon rail keeps only primary
+            navigation; an inert spacer holds the sign-out row at the bottom. */}
+        <div aria-hidden="true" className={navCollapsed ? 'flex-1' : 'hidden'} />
+        <div className={`flex-1 overflow-y-auto p-3 space-y-4 ${navCollapsed ? 'hidden' : ''}`}>
           <div>
-            <div className="flex items-center gap-2 mb-2 text-slate-400 px-1">
-              <History className="w-3 h-3" />
-              <span className="text-[10px] font-semibold uppercase tracking-wider">Recent Searches</span>
+            <div className="flex items-center gap-2 mb-2 text-nav-fg-mute px-1">
+              <History className="w-3.5 h-3.5" />
+              <span className="text-[11px] font-semibold uppercase tracking-wider">{t('nav.recentSearches')}</span>
             </div>
             <div className="space-y-1">
               {history.map((h, i) => (
-                <button key={i} onClick={() => { setQuery(h.natural_query); setActiveTab('query'); }}
-                  className="w-full text-left p-2 rounded-lg hover:bg-slate-800 transition-colors">
-                  <p className="text-xs text-slate-300 line-clamp-2">{h.natural_query}</p>
+                <button key={i} onClick={() => { setQuery(h.natural_query); setActiveTab('query'); setNavOpen(false); }}
+                  title={h.natural_query}
+                  className="w-full text-left p-2 rounded-md hover:bg-white/[0.07] transition-colors">
+                  <p className="text-[13px] text-nav-fg/90 line-clamp-2">{h.natural_query}</p>
                 </button>
               ))}
             </div>
@@ -1125,18 +1281,18 @@ export default function Dashboard() {
 
           {recentActivity.additions?.length > 0 && (
             <div>
-              <div className="flex items-center gap-2 mb-2 text-green-400 px-1">
-                <PlusCircle className="w-3 h-3" />
-                <span className="text-[10px] font-semibold uppercase tracking-wider">Recently Added</span>
+              <div className="flex items-center gap-2 mb-2 text-ok px-1">
+                <PlusCircle className="w-3.5 h-3.5" />
+                <span className="text-[11px] font-semibold uppercase tracking-wider">{t('nav.recentlyAdded')}</span>
               </div>
-              <div className="space-y-1">
+              <div className="space-y-1.5">
                 {recentActivity.additions.map((act, i) => (
-                  <div key={i} className="p-2 rounded-lg bg-slate-800/50 border border-slate-700/50">
-                    <p className="text-xs font-semibold text-slate-200">{act.student_name}</p>
-                    <p className="text-[10px] text-slate-400 font-mono">{act.usn}</p>
-                    <div className="flex items-center justify-between mt-1 text-[9px] text-slate-500">
-                      <span>By: {act.added_by}</span>
-                      <span className="flex items-center gap-0.5"><Clock className="w-2.5 h-2.5" /> {new Date(act.timestamp).toLocaleDateString()}</span>
+                  <div key={i} className="p-2.5 rounded-md bg-white/[0.05] border border-white/[0.07]">
+                    <p className="text-[13px] font-semibold text-nav-fg t-truncate" title={act.student_name}>{act.student_name}</p>
+                    <p className="text-xs text-nav-fg-mute font-mono t-truncate" title={act.usn}>{act.usn}</p>
+                    <div className="flex items-center justify-between mt-1 text-[11px] text-nav-fg-mute">
+                      <span className="t-truncate">{t('nav.by')} {act.added_by}</span>
+                      <span className="flex items-center gap-1 flex-shrink-0"><Clock className="w-3 h-3" /> {new Date(act.timestamp).toLocaleDateString()}</span>
                     </div>
                   </div>
                 ))}
@@ -1146,18 +1302,18 @@ export default function Dashboard() {
 
           {recentActivity.deletions?.length > 0 && (
             <div>
-              <div className="flex items-center gap-2 mb-2 text-red-400 px-1">
-                <Trash2 className="w-3 h-3" />
-                <span className="text-[10px] font-semibold uppercase tracking-wider">Recently Deleted</span>
+              <div className="flex items-center gap-2 mb-2 text-err px-1">
+                <Trash2 className="w-3.5 h-3.5" />
+                <span className="text-[11px] font-semibold uppercase tracking-wider">{t('nav.recentlyDeleted')}</span>
               </div>
-              <div className="space-y-1">
+              <div className="space-y-1.5">
                 {recentActivity.deletions.map((act, i) => (
-                  <div key={i} className="p-2 rounded-lg bg-slate-800/50 border border-slate-700/50">
-                    <p className="text-xs font-semibold text-slate-200">{act.student_name}</p>
-                    <p className="text-[10px] text-slate-400 font-mono">{act.usn}</p>
-                    <div className="flex items-center justify-between mt-1 text-[9px] text-slate-500">
-                      <span>By: {act.deleted_by}</span>
-                      <span className="flex items-center gap-0.5"><Clock className="w-2.5 h-2.5" /> {new Date(act.timestamp).toLocaleDateString()}</span>
+                  <div key={i} className="p-2.5 rounded-md bg-white/[0.05] border border-white/[0.07]">
+                    <p className="text-[13px] font-semibold text-nav-fg t-truncate" title={act.student_name}>{act.student_name}</p>
+                    <p className="text-xs text-nav-fg-mute font-mono t-truncate" title={act.usn}>{act.usn}</p>
+                    <div className="flex items-center justify-between mt-1 text-[11px] text-nav-fg-mute">
+                      <span className="t-truncate">{t('nav.by')} {act.deleted_by}</span>
+                      <span className="flex items-center gap-1 flex-shrink-0"><Clock className="w-3 h-3" /> {new Date(act.timestamp).toLocaleDateString()}</span>
                     </div>
                     {/* Quick restore button */}
                     {act.restore_token && (
@@ -1171,9 +1327,9 @@ export default function Dashboard() {
                             showToast({ type: 'error', message: getUserMessage(e, 'Could not restore student.') });
                           }
                         }}
-                        className="mt-1.5 w-full flex items-center justify-center gap-1 py-1 text-[10px] font-semibold text-green-400 hover:text-green-300 hover:bg-green-900/30 rounded transition-colors border border-green-800/40"
+                        className="mt-2 w-full flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold text-ok bg-ok/10 hover:bg-ok/20 rounded-md transition-colors border border-ok/25"
                       >
-                        <RotateCcw className="w-2.5 h-2.5" /> Restore
+                        <RotateCcw className="w-3 h-3" /> {t('nav.restore')}
                       </button>
                     )}
                   </div>
@@ -1183,54 +1339,106 @@ export default function Dashboard() {
           )}
         </div>
 
-        <div className="p-3 border-t border-slate-800">
+        <div className="p-3 border-t border-nav-line">
           <button onClick={handleLogout}
-            className="w-full flex items-center justify-center gap-2 py-2 text-xs text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all">
-            <LogOut className="w-3.5 h-3.5" /> Sign Out
+            title={t('nav.signOut')}
+            aria-label={t('nav.signOut')}
+            className={`w-full flex items-center gap-2 py-2 rounded-md text-sm text-nav-fg-mute hover:text-white hover:bg-white/[0.07] transition-colors
+              ${navCollapsed ? 'justify-center px-0' : 'justify-center'}`}>
+            <LogOut className="w-4 h-4" /> <span className={navCollapsed ? 'hidden' : ''}>{t('nav.signOut')}</span>
           </button>
         </div>
-      </div>
+      </aside>
 
       {/* ── Main ── */}
       <div className="flex-1 flex flex-col h-screen overflow-hidden relative">
-        {/* Background */}
-        <div className="absolute inset-0 pointer-events-none z-0">
-          <div className="absolute inset-0 opacity-20 bg-no-repeat bg-center bg-cover"
-            style={{ backgroundImage: "url('/college-bg.jpg')" }} />
-          <div className="absolute inset-0 bg-white/70 dark:bg-slate-955/80 backdrop-blur-[2px]" />
-        </div>
+        {/* Background: the college photograph, full-bleed behind the whole
+            working area and drifting very slowly. It is a ground, not a
+            section — every card and table sits on top of it. Falls back to
+            the campus gradient when public/college-photo.jpg is absent. */}
+        <div
+          className={`dash-bg absolute inset-0 pointer-events-none z-0 ${hasCampusPhoto ? 'has-photo' : ''}`}
+          aria-hidden="true"
+        />
 
-        <header className="h-12 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center px-6 shadow-sm z-10 shrink-0 gap-3">
-          <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
-            {activeTab === 'query' ? 'Query Engine'
-              : activeTab === 'files' ? 'Files / Uploads'
-              : activeTab === 'backup' ? 'Database Reliability & Backup Center'
-              : activeTab === 'analytics' ? 'Analytics Dashboard'
-              : activeTab === 'lifecycle' ? 'Student Lifecycle Management'
-              : activeTab === 'activity' ? 'Audit & Activity Logs'
-              : 'Data Validation'}
+        <header className="h-14 bg-surface/85 backdrop-blur border-b border-line flex items-center px-4 sm:px-6 shadow-sm z-10 shrink-0 gap-3">
+          <button
+            type="button"
+            onClick={() => setNavOpen(true)}
+            className="lg:hidden btn btn-ghost btn-sm"
+            aria-label={t('nav.menu')}
+          >
+            <Menu className="w-4 h-4" />
+          </button>
+          {/* Rail toggle — the sidebar can shrink to icons so the working area
+              gets the width back. Purely local, like the theme choice. */}
+          <button
+            type="button"
+            onClick={() => setNavCollapsed((v) => !v)}
+            className="btn btn-ghost btn-sm"
+            aria-label={navCollapsed ? t('nav.expand') : t('nav.collapse')}
+            aria-expanded={!navCollapsed}
+            title={navCollapsed ? t('nav.expand') : t('nav.collapse')}
+          >
+            {navCollapsed
+              ? <PanelLeftOpen className="w-4 h-4" aria-hidden="true" />
+              : <PanelLeftClose className="w-4 h-4" aria-hidden="true" />}
+          </button>
+          <h2 className="text-[15px] sm:text-base font-semibold text-ink t-truncate">
+            {t({
+              query: 'nav.headerQuery',
+              files: 'nav.headerFiles',
+              backup: 'nav.headerBackup',
+              analytics: 'nav.headerAnalytics',
+              lifecycle: 'nav.headerLifecycle',
+              activity: 'nav.headerActivity',
+              validation: 'nav.headerValidation',
+            }[activeTab] || 'nav.headerValidation')}
           </h2>
-          <span className="px-2 py-0.5 text-xs bg-blue-100 text-blue-700 rounded-full">MySQL</span>
-          {results?.cached && <span className="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">Cached</span>}
+          <div className="ml-auto flex items-center gap-2 min-w-0">
+            {deptName && (
+              <span className="badge badge-quiet max-w-[14rem]" title={deptName}>
+                <span
+                  className="w-2 h-2 rounded-full flex-shrink-0"
+                  style={{ background: `rgb(${deptRgb})` }}
+                  aria-hidden="true"
+                />
+                <span className="t-truncate">{deptName}</span>
+              </span>
+            )}
+            <span className="badge badge-brand flex-shrink-0">{t('nav.badgeMysql')}</span>
+            {results?.cached && <span className="badge badge-ok flex-shrink-0">{t('nav.badgeCached')}</span>}
+          </div>
         </header>
 
-        <main className="flex-1 overflow-y-auto p-5 relative z-10">
-          <div className="max-w-5xl mx-auto space-y-4">
+        <main className="dept-tint flex-1 overflow-y-auto p-4 sm:p-5 relative z-10" style={deptStyle}>
+          {/* key={activeTab} remounts the panel on tab change so the entrance
+              animation replays; every value in here is parent state, so no
+              query, selection or in-progress edit is lost. */}
+          <div key={activeTab} className="anim-page max-w-5xl mx-auto space-y-4">
             {/* Institutional header */}
             {activeTab === 'query' && <ReportHeader showInDashboard={showHeader} />}
 
             {/* Upload notice */}
             {uploadNotice && (
-              <div className="flex items-start gap-3 p-3 bg-green-50 border border-green-200 rounded-xl text-sm text-green-800">
-                <CheckCircle className="w-4 h-4 text-green-500 flex-shrink-0 mt-0.5" />
-                <div>
-                  <p className="font-semibold">{uploadNotice.filename} — {uploadNotice.message}</p>
-                  <p className="text-xs text-green-600 mt-0.5">
-                    {uploadNotice.rows_parsed} parsed · New {uploadNotice.students_added ?? 0} · Updated {uploadNotice.students_updated ?? 0} · Unchanged {uploadNotice.students_unchanged ?? 0} · Dup {uploadNotice.duplicate_rows ?? 0} · Invalid {uploadNotice.invalid_rows ?? 0} · Saved {uploadNotice.students_saved} students / {uploadNotice.marks_saved} marks
+              <div role="status" className="flex items-start gap-3 p-3 rounded-lg bg-ok-soft text-sm text-ok">
+                <CheckCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                <div className="min-w-0">
+                  <p className="font-semibold break-words">{uploadNotice.filename} — {uploadNotice.message}</p>
+                  <p className="text-[13px] mt-0.5 text-ink-soft">
+                    {[
+                      `${uploadNotice.rows_parsed} ${t('upload.parsed')}`,
+                      `${t('upload.new')} ${uploadNotice.students_added ?? 0}`,
+                      `${t('upload.updated')} ${uploadNotice.students_updated ?? 0}`,
+                      `${t('upload.unchanged')} ${uploadNotice.students_unchanged ?? 0}`,
+                      `${t('upload.dup')} ${uploadNotice.duplicate_rows ?? 0}`,
+                      `${t('upload.invalid')} ${uploadNotice.invalid_rows ?? 0}`,
+                      `${t('upload.saved')} ${uploadNotice.students_saved} ${t('upload.students')} / ${uploadNotice.marks_saved} ${t('upload.marks')}`,
+                    ].join(' · ')}
                   </p>
                   {uploadNotice.column_mapping && Object.keys(uploadNotice.column_mapping).length > 0 && (
-                    <p className="text-xs text-green-600 mt-0.5">
-                      Columns mapped: {Object.entries(uploadNotice.column_mapping).map(([k,v]) => `${k}→${v}`).join(', ')}
+                    <p className="text-[13px] mt-0.5 text-ink-soft break-words">
+                      {t('upload.columnsMapped')} {Object.entries(uploadNotice.column_mapping).map(([k,v]) => `${k}→${v}`).join(', ')}
                     </p>
                   )}
                 </div>
@@ -1292,10 +1500,37 @@ export default function Dashboard() {
             {/* ── Query Tab ── */}
             {activeTab === 'query' && (
               <>
+                {/* Welcome hero — a copy card over the campus background. The
+                    photograph itself is the page ground, so it is not repeated
+                    in a frame here. */}
+                {!results && (
+                  <section className="welcome-hero anim-fade-up p-5 sm:p-7">
+                    <div className="min-w-0 flex-1 flex flex-col justify-center">
+                      <p className="eyebrow text-[11px] text-brand-fg">{t('brand.tagline')}</p>
+                      <h3 className="t-section text-ink mt-1.5">{t('hero.title')}</h3>
+                      <p className="t-body text-ink-soft mt-2 max-w-[48ch]">{t('hero.body')}</p>
+                      <div className="mt-3.5 flex flex-wrap items-center gap-2">
+                        <span className="badge badge-quiet max-w-full">
+                          <Search className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
+                          <span className="t-truncate">{t('hero.capType')}</span>
+                        </span>
+                        <span className="badge badge-quiet max-w-full">
+                          <Mic className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
+                          <span className="t-truncate">{t('hero.capVoice')}</span>
+                        </span>
+                        <span className="badge badge-quiet max-w-full">
+                          <Database className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
+                          <span className="t-truncate">{t('hero.capDb')}</span>
+                        </span>
+                      </div>
+                    </div>
+                  </section>
+                )}
+
                 {/* Query input */}
                 <div className="relative z-50">
                   {/* Language and Voice Selectors */}
-                  <div className="flex items-center gap-3 mb-3">
+                  <div className="flex flex-wrap items-center gap-3 mb-3">
                     {/* Language Selector */}
                     <LanguageSelector 
                       selectedLanguage={selectedLanguage}
@@ -1304,45 +1539,42 @@ export default function Dashboard() {
                     
                     {/* Voice Language Selector */}
                     <div className="relative">
+                      <label className="sr-only" htmlFor="voice-language-select">{t('query.voiceLabel')}</label>
                       <select
+                        id="voice-language-select"
                         value={voiceLanguage}
                         onChange={(e) => handleVoiceLanguageChange(e.target.value)}
-                        className="appearance-none pl-9 pr-8 py-2 text-sm font-medium bg-white border border-slate-200 rounded-lg hover:border-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-400 transition-all cursor-pointer text-slate-700"
-                        title="Select voice input language"
+                        className="input appearance-none w-auto max-w-full pl-9 pr-9 text-sm font-medium cursor-pointer"
+                        title={t('query.voiceLabel')}
                       >
-                        <option value="en-US">🎤 English</option>
-                        <option value="kn-IN">🎤 ಕನ್ನಡ</option>
-                        <option value="en-IN">🎤 English (India)</option>
+                        <option value="en-US">🎤 {t('query.voiceEnglish')}</option>
+                        <option value="kn-IN" lang="kn">🎤 {t('query.voiceKannada')}</option>
+                        <option value="en-IN">🎤 {t('query.voiceIndia')}</option>
                       </select>
-                      <div className="absolute left-3 top-1/2 transform -translate-y-1/2 pointer-events-none">
-                        <Mic className="w-4 h-4 text-slate-400" />
-                      </div>
-                      <div className="absolute right-2 top-1/2 transform -translate-y-1/2 pointer-events-none">
-                        <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                        </svg>
-                      </div>
+                      <Mic className="w-4 h-4 text-ink-mute absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" aria-hidden="true" />
+                      <ChevronDown className="w-4 h-4 text-ink-mute absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" aria-hidden="true" />
                     </div>
-                    
+
                     {/* Language indicator badge */}
                     {selectedLanguage !== 'english' && (
-                      <div className="flex-1 flex items-center gap-2">
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-gradient-to-r from-orange-50 to-amber-50 text-orange-700 border border-orange-200">
-                          <span className="w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse"></span>
-                          {selectedLanguage === 'kannada' ? 'ಕನ್ನಡ Mode' : 'Mixed Language Mode'}
+                      <div className="flex-1 flex items-center gap-2 min-w-0">
+                        <span className="badge badge-accent max-w-full">
+                          <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse flex-shrink-0" aria-hidden="true" />
+                          <span className="t-truncate">{selectedLanguage === 'kannada' ? t('query.kannadaMode') : t('query.mixedMode')}</span>
                         </span>
                       </div>
                     )}
                   </div>
                   
-                  <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-2 focus-within:ring-2 focus-within:ring-blue-500 transition-all">
+                  <div className="card rounded-xl p-2 focus-within:ring-2 focus-within:ring-ring/60">
                     <form onSubmit={handleQuerySubmit} className="relative flex items-end">
                       <textarea 
                         ref={textareaRef}
                         value={query} 
                         onChange={handleQueryChange}
+                        aria-label={t('query.ariaInput')}
                         placeholder={getPlaceholderText(selectedLanguage)}
-                        className="w-full resize-none p-4 pb-12 outline-none text-slate-700 placeholder-slate-400 bg-transparent min-h-[90px] text-sm"
+                        className="w-full resize-none p-4 pb-12 outline-none bg-transparent text-ink placeholder:text-ink-faint min-h-[90px] text-[15px] leading-relaxed"
                         onKeyDown={(e) => {
                           // Handle Kannada mode key events first
                           if (selectedLanguage === 'kannada') {
@@ -1381,62 +1613,69 @@ export default function Dashboard() {
                         }} 
                         onFocus={() => { if (liveSuggestions.length > 0) setShowLiveDropdown(true); }}
                       />
-                      <div className="absolute bottom-3 left-3 flex items-center gap-2">
+                      <div className="absolute bottom-3 left-3 flex flex-wrap items-center gap-2 max-w-[calc(100%-1.5rem)]">
                         <button type="button" onClick={toggleListen}
-                          className={`p-2 rounded-xl transition-all ${isListening ? 'bg-red-100 text-red-600 animate-pulse' : 'bg-slate-100 text-slate-500 hover:bg-blue-50 hover:text-blue-600'}`}
-                          title={`Voice input (${voiceLanguage === 'kn-IN' ? 'Kannada' : 'English'})`}>
+                          aria-pressed={isListening}
+                          className={`btn btn-sm ${isListening ? 'btn-danger-soft animate-pulse' : 'btn-ghost'}`}
+                          title={`${t('query.mic')} (${voiceLanguage === 'kn-IN' ? t('query.voiceKannada') : t('query.voiceEnglish')})`}
+                          aria-label={t('query.mic')}>
                           <Mic className="w-4 h-4" />
                         </button>
                         {isListening && (
-                          <span className="text-xs text-red-500 animate-pulse font-medium">
-                            {voiceLanguage === 'kn-IN' ? 'ಆಲಿಸುತ್ತಿದೆ...' : 'Listening...'}
+                          <span role="status" aria-live="polite" className="t-support text-err font-medium animate-pulse">
+                            {t('query.listening')}
                           </span>
                         )}
                         {selectedLanguage === 'kannada' && !isListening && (
-                          <div className="text-xs bg-green-50 text-green-700 px-3 py-1.5 rounded-lg border border-green-200 font-medium flex items-center gap-2">
-                            <Languages className="w-3.5 h-3.5" />
-                            <span>✨ Auto-convert: Type English → Get Kannada instantly!</span>
+                          <div className="flex items-center gap-2 text-[13px] bg-ok-soft text-ok px-3 py-1.5 rounded-md border border-ok/20 font-medium min-w-0">
+                            <Languages className="w-3.5 h-3.5 flex-shrink-0" aria-hidden="true" />
+                            <span className="t-truncate">{t('query.autoConvert')}</span>
                           </div>
                         )}
                       </div>
                       <div className="absolute bottom-3 right-3">
                         <button type="submit" disabled={isLoading || !query.trim()}
-                          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition-all shadow-md shadow-blue-500/20 disabled:opacity-50">
+                          className="btn btn-accent">
                           {isLoading
-                            ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Searching...</>
+                            ? <><div className="no-transition w-4 h-4 border-2 border-accent-fg/30 border-t-accent-fg rounded-full animate-spin" /> {t('query.searching')}</>
                             : queryComplete
-                              ? <><CheckCircle className="w-3.5 h-3.5" /> Query Complete</>
-                              : <><Send className="w-3.5 h-3.5" /> Run Query</>}
+                              ? <><CheckCircle className="w-4 h-4" /> {t('query.complete')}</>
+                              : <><Send className="w-4 h-4" /> {t('query.run')}</>}
                         </button>
                       </div>
                     </form>
                     
                     {/* Kannada Transliteration Suggestions (Desh Kannada style) */}
                     {selectedLanguage === 'kannada' && kannadaSuggestions.length > 0 && (
-                      <div className="absolute top-full left-0 right-0 mt-1 bg-white border-2 border-orange-300 rounded-xl shadow-2xl z-[100] overflow-hidden">
-                        <div className="px-3 py-2 bg-gradient-to-r from-orange-50 to-amber-50 border-b border-orange-100 flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <Languages className="w-3.5 h-3.5 text-orange-600" />
-                            <span className="text-xs font-bold text-orange-700">
-                              ಕನ್ನಡ Suggestions (Space or Click to select)
-                            </span>
-                          </div>
-                          <span className="text-[10px] text-slate-500 italic">↑↓ navigate · Space/Enter select</span>
+                      <div
+                        role="listbox"
+                        aria-label={t('query.kaSuggestions')}
+                        className="popover absolute top-full left-0 right-0 mt-1 rounded-xl overflow-hidden slide-down"
+                      >
+                        <div className="px-3 py-2 bg-sunken border-b border-line flex flex-wrap items-center justify-between gap-2">
+                          <span className="flex items-center gap-2 t-support font-bold text-accent-ink min-w-0">
+                            <Languages className="w-3.5 h-3.5 flex-shrink-0" aria-hidden="true" />
+                            <span className="t-truncate">{t('query.kaSuggestions')}</span>
+                          </span>
+                          <span className="t-support text-ink-mute">{t('query.kaNavigate')}</span>
                         </div>
                         <div className="max-h-48 overflow-y-auto">
                           {kannadaSuggestions.map((suggestion, idx) => (
                             <button
                               key={idx}
+                              lang="kn"
+                              role="option"
+                              aria-selected={idx === activeSuggestion}
                               onClick={() => applySuggestion(idx)}
                               onMouseEnter={() => setActiveSuggestion(idx)}
-                              className={`w-full text-left px-4 py-3 transition-all border-b border-orange-50 last:border-0
-                                ${idx === activeSuggestion 
-                                  ? 'bg-orange-100 border-l-4 border-l-orange-500 font-semibold' 
-                                  : 'hover:bg-orange-50'}`}
+                              className={`w-full text-left px-4 py-3 border-b border-line last:border-0 flex items-center gap-2
+                                ${idx === activeSuggestion
+                                  ? 'bg-brand/[0.07] border-l-4 border-l-brand font-semibold'
+                                  : 'hover:bg-sunken'}`}
                             >
-                              <span className="text-lg text-slate-800">{suggestion}</span>
+                              <span className="t-card text-ink">{suggestion}</span>
                               {idx === 0 && (
-                                <span className="ml-2 text-xs text-orange-600 font-medium">(Press Space)</span>
+                                <span className="t-support text-accent-ink font-medium">{t('query.kaPressSpace')}</span>
                               )}
                             </button>
                           ))}
@@ -1447,15 +1686,15 @@ export default function Dashboard() {
 
                   {/* Language-aware example queries */}
                   {!query && !results && (
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <span className="text-xs text-slate-400 font-medium">Try:</span>
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <span className="t-support text-ink-mute font-medium">{t('query.try')}</span>
                       {getExampleQueries(selectedLanguage).map((example, idx) => (
                         <button
                           key={idx}
                           onClick={() => setQuery(example)}
-                          className="px-3 py-1.5 text-xs bg-slate-50 hover:bg-blue-50 border border-slate-200 hover:border-blue-300 rounded-lg text-slate-600 hover:text-blue-700 transition-all"
+                          className="px-3 py-1.5 t-support bg-surface border border-line rounded-md text-ink-soft hover:bg-brand/[0.06] hover:border-brand/30 hover:text-ink transition-colors text-left min-w-0 max-w-full"
                         >
-                          {example}
+                          <span className="t-truncate block">{example}</span>
                         </button>
                       ))}
                     </div>
@@ -1465,18 +1704,19 @@ export default function Dashboard() {
                   {showLiveDropdown && liveSuggestions.length > 0 && (
                     <div
                       ref={dropdownRef}
-                      className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-2xl z-[100] overflow-hidden"
-                      style={{ animation: 'slideDown 0.15s ease-out' }}
+                      role="listbox"
+                      aria-label={t('query.liveCount', { n: liveSuggestions.length, s: liveSuggestions.length !== 1 ? 's' : '', q: liveSearchTerm })}
+                      className="popover absolute top-full left-0 right-0 mt-1 rounded-xl overflow-hidden slide-down"
                     >
                       {/* Header */}
-                      <div className="px-3 py-2 bg-gradient-to-r from-blue-50 to-indigo-50 border-b border-slate-100 flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <Search className="w-3 h-3 text-blue-500" />
-                          <span className="text-[10px] font-bold text-blue-600 uppercase tracking-wider">
-                            {liveSuggestions.length} suggestion{liveSuggestions.length !== 1 ? 's' : ''} for &ldquo;{liveSearchTerm}&rdquo;
+                      <div className="px-3 py-2 bg-sunken border-b border-line flex flex-wrap items-center justify-between gap-2">
+                        <span className="flex items-center gap-2 t-support font-bold text-brand-fg min-w-0">
+                          <Search className="w-3.5 h-3.5 flex-shrink-0" aria-hidden="true" />
+                          <span className="t-truncate">
+                            {t('query.liveCount', { n: liveSuggestions.length, s: liveSuggestions.length !== 1 ? 's' : '', q: liveSearchTerm })}
                           </span>
-                        </div>
-                        <span className="text-[10px] text-slate-400 italic">↑↓ navigate · Enter select · Esc close</span>
+                        </span>
+                        <span className="t-support text-ink-mute">{t('query.liveHint')}</span>
                       </div>
 
                       {/* Suggestion rows */}
@@ -1488,36 +1728,49 @@ export default function Dashboard() {
                           return (
                             <button
                               key={s.usn}
+                              role="option"
+                              aria-selected={isActive}
                               onClick={() => {
                                 selectSuggestionAndRun(s);
                               }}
                               onMouseEnter={() => setActiveSuggestion(idx)}
-                              className={`w-full flex items-center justify-between px-4 py-3 text-left transition-all border-b border-slate-50 last:border-0 group
-                                ${isActive ? 'bg-blue-50 border-l-2 border-l-blue-500' : 'hover:bg-slate-50'}`}
+                              className={`w-full flex items-center justify-between gap-3 px-4 py-3 text-left border-b border-line last:border-0 group
+                                ${isActive ? 'bg-brand/[0.07] border-l-4 border-l-brand' : 'hover:bg-sunken'}`}
                             >
                               {/* Avatar + name */}
                               <div className="flex items-center gap-3 min-w-0">
-                                <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm flex-shrink-0 transition-colors
-                                  ${isActive ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-600 group-hover:bg-blue-200'}`}>
+                                <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm flex-shrink-0
+                                  ${isActive ? 'bg-brand text-white' : 'bg-brand/10 text-brand-fg group-hover:bg-brand/20'}`}>
                                   {(s.name || '?').charAt(0).toUpperCase()}
                                 </div>
                                 <div className="min-w-0">
-                                  <p className="text-sm font-semibold text-slate-800 truncate">
+                                  <p className="t-body font-semibold text-ink t-truncate" title={s.name || ''}>
                                     <HighlightMatch text={s.name || ''} query={liveSearchTerm} />
                                   </p>
-                                  <p className="text-[11px] text-slate-400 font-mono">{s.usn}</p>
+                                  <p className="t-support text-ink-mute font-mono t-truncate" title={s.usn || ''}>{s.usn}</p>
                                   {s.suggested_phrases?.length > 1 && (
                                     <div className="flex flex-wrap gap-1 mt-1">
                                       {s.suggested_phrases.slice(1, 4).map((phrase, pIdx) => (
                                         <span
                                           key={pIdx}
+                                          role="button"
+                                          tabIndex={0}
                                           onClick={(e) => {
                                             e.stopPropagation();
                                             setQuery(phrase);
                                             setShowLiveDropdown(false);
                                             handleQuerySubmit();
                                           }}
-                                          className="text-[10px] bg-slate-100 hover:bg-blue-100 text-slate-600 hover:text-blue-700 px-1.5 py-0.5 rounded border border-slate-200 cursor-pointer transition-colors"
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter' || e.key === ' ') {
+                                              e.preventDefault();
+                                              e.stopPropagation();
+                                              setQuery(phrase);
+                                              setShowLiveDropdown(false);
+                                              handleQuerySubmit();
+                                            }
+                                          }}
+                                          className="text-[12px] bg-sunken hover:bg-brand/10 text-ink-soft px-1.5 py-0.5 rounded border border-line cursor-pointer"
                                         >
                                           {phrase}
                                         </span>
@@ -1528,12 +1781,10 @@ export default function Dashboard() {
                               </div>
 
                               {/* Right side: badge + score + arrow */}
-                              <div className="flex items-center gap-2 flex-shrink-0 ml-2">
-                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase ${badge.cls}`}>
-                                  {badge.label}
-                                </span>
-                                <span className="text-[10px] text-slate-400 font-mono w-8 text-right">{pct}%</span>
-                                <ChevronRight className={`w-4 h-4 transition-all ${isActive ? 'text-blue-500 translate-x-0.5' : 'text-slate-300'}`} />
+                              <div className="flex items-center gap-2 flex-shrink-0">
+                                <span className={`badge ${badge.cls}`}>{badge.label}</span>
+                                <span className="t-support text-ink-mute font-mono w-10 text-right tabular-nums">{pct}%</span>
+                                <ChevronRight className={`w-4 h-4 ${isActive ? 'text-brand-fg' : 'text-ink-faint'}`} />
                               </div>
                             </button>
                           );
@@ -1541,42 +1792,51 @@ export default function Dashboard() {
                       </div>
 
                       {/* Footer hint */}
-                      <div className="px-3 py-1.5 bg-slate-50 border-t border-slate-100 text-center">
-                        <span className="text-[9px] text-slate-400">
-                          Press <kbd className="px-1 py-0.5 bg-white border border-slate-200 rounded text-[9px]">Enter</kbd> to search · Click to view student
+                      <div className="px-3 py-2 bg-sunken border-t border-line text-center">
+                        <span className="text-[12px] text-ink-mute">
+                          {t('query.liveFooter', { key: t('query.kbdEnter') })}
                         </span>
                       </div>
                     </div>
                   )}
-                  <style>{`@keyframes slideDown { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:translateY(0); } }`}</style>
                 </div>
 
                 {isLoading && (
-                  <div role="status" aria-live="polite" className="flex items-center gap-3 p-4 bg-blue-50 border border-blue-200 rounded-xl">
-                    <div className="w-5 h-5 border-2 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
-                    <div>
-                      <p className="text-sm font-semibold text-blue-900">Searching students...</p>
-                      <p className="text-xs text-blue-700 mt-0.5">Applying the submitted filters and validating matching records.</p>
+                  <div role="status" aria-live="polite" className="card anim-fade-in overflow-hidden">
+                    <div className="fetch-bar" aria-hidden="true" />
+                    <div className="p-4 flex items-start gap-3">
+                      <div className="no-transition w-5 h-5 rounded-full border-2 border-line border-t-brand animate-spin flex-shrink-0 mt-0.5" aria-hidden="true" />
+                      <div className="min-w-0 flex-1">
+                        <p className="t-label text-ink">{t('query.loadingTitle')}</p>
+                        <p className="t-support text-ink-mute mt-0.5">{t('query.loadingBody')}</p>
+                        {/* Shape preview only — no invented rows. */}
+                        <div className="skeleton-list mt-3" aria-hidden="true">
+                          <span className="skeleton w-full" />
+                          <span className="skeleton w-11/12" />
+                          <span className="skeleton w-4/5" />
+                          <span className="skeleton w-2/3" />
+                        </div>
+                      </div>
                     </div>
                   </div>
                 )}
 
                 {/* Error — suppress stale messages during a request or while typing */}
                 {error && !isLoading && !showLiveDropdown && (
-                  <div className="bg-red-50 text-red-700 p-4 rounded-xl flex items-start gap-3 border border-red-100">
+                  <div role="alert" className="p-4 rounded-lg flex items-start gap-3 bg-err-soft text-err">
                     <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                    <div>
-                      <p className="font-semibold text-sm">Query Failed</p>
-                      <p className="text-sm mt-0.5 text-red-600">{error}</p>
+                    <div className="min-w-0">
+                      <p className="t-label">{t('query.failed')}</p>
+                      <p className="t-body mt-0.5 break-words">{error}</p>
                     </div>
                   </div>
                 )}
 
                 {/* No-match message — only show when NOT typing (no live suggestions active) */}
                 {noMatchMsg && !isLoading && !suggestion && !showLiveDropdown && (
-                  <div className="flex items-start gap-3 p-4 bg-slate-50 border border-slate-200 rounded-2xl">
-                    <AlertTriangle className="w-5 h-5 text-slate-400 flex-shrink-0 mt-0.5" />
-                    <p className="text-sm text-slate-600 font-medium">{noMatchMsg}</p>
+                  <div className="card p-4 flex items-start gap-3">
+                    <AlertTriangle className="w-5 h-5 text-ink-faint flex-shrink-0 mt-0.5" />
+                    <p className="t-body font-medium text-ink-soft">{noMatchMsg}</p>
                   </div>
                 )}
 
@@ -1591,112 +1851,108 @@ export default function Dashboard() {
 
                 {/* Auto-correction notice */}
                 {results?.auto_corrected && results?.correction_message && (
-                  <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-200 rounded-xl text-sm text-blue-800">
-                    <Search className="w-4 h-4 text-blue-500 flex-shrink-0" />
+                  <div role="status" className="flex items-center gap-2 p-3 rounded-lg bg-info-soft text-sm text-info">
+                    <Search className="w-4 h-4 flex-shrink-0" />
                     <span>{results.correction_message}</span>
                   </div>
                 )}
                 {/* Results */}
                 {results && (
-                  <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                  <div className="anim-reveal card overflow-hidden">
                     {appliedConditions.length > 1 && (
-                      <section aria-label="Applied filters" className="px-5 py-4 border-b border-slate-100 bg-white">
+                      <section aria-label={t('results.ariaFilters')} className="px-4 sm:px-5 py-4 border-b border-line bg-surface">
                         <div className="flex items-center justify-between gap-3 mb-2">
-                          <h4 className="text-xs font-bold uppercase tracking-wide text-slate-600">Applied filters</h4>
-                          <span className="text-[11px] text-slate-500">{appliedConditions.length} conditions</span>
+                          <h4 className="text-[13px] font-bold uppercase tracking-wide text-ink-soft">{t('query.reportedFilters')}</h4>
+                          <span className="text-[12px] text-ink-mute">{t('query.conditions', { n: appliedConditions.length })}</span>
                         </div>
                         <ul className="flex flex-wrap gap-2">
                           {appliedConditions.map((condition, index) => (
-                            <li key={`${condition.field}-${index}`} className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-50 border border-slate-200 rounded-md text-xs text-slate-700">
-                              <CheckCircle className="w-3 h-3 text-green-600" />
+                            <li key={`${condition.field}-${index}`} className="badge badge-quiet">
+                              <CheckCircle className="w-3 h-3 text-ok" />
                               {describeCondition(condition)}
                             </li>
                           ))}
                         </ul>
                         {!data.length && (
-                          <p className="mt-3 text-xs text-slate-600">
-                            Conditions checked: {appliedConditions.map(describeCondition).join(' · ')}
+                          <p className="mt-3 text-[13px] text-ink-mute">
+                            {t('query.conditionsChecked')} {appliedConditions.map(describeCondition).join(' · ')}
                           </p>
                         )}
                       </section>
                     )}
-                    <div className="px-5 py-3 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
-                      <div className="flex items-center gap-3">
-                        <div className="p-1.5 bg-green-100 text-green-700 rounded-lg">
+                    <div className="px-4 sm:px-5 py-3 border-b border-line flex items-center justify-between gap-3 bg-sunken/60">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="p-1.5 bg-ok-soft text-ok rounded-md flex-shrink-0">
                           <TableIcon className="w-4 h-4" />
                         </div>
-                        <div>
-                          <h3 className="text-sm font-bold text-slate-800">
-                            {isScalarNumber ? 'Result' : isGirlsNamesList ? 'Female Students' : (data.length > 0 ? `${data.length} record(s)` : (results.query_ast ? 'No matching students' : 'Operation Complete'))}
+                        <div className="min-w-0">
+                          <h3 className="t-card t-truncate">
+                            {isScalarNumber ? t('results.result') : isGirlsNamesList ? t('results.femaleStudents') : (data.length > 0 ? t('results.records', { n: data.length }) : (results.query_ast ? t('results.noMatching') : t('results.operationComplete')))}
                           </h3>
                           {results.execution_time != null && (
-                            <p className="text-xs text-slate-400">{(results.execution_time * 1000).toFixed(1)}ms{results.cached ? ' · from cache' : ''}</p>
+                            <p className="text-[12px] text-ink-mute tabular-nums">{(results.execution_time * 1000).toFixed(1)}ms{results.cached ? ` · ${t('query.fromCache')}` : ''}</p>
                           )}
                         </div>
                       </div>
                       {data.length > 0 && !isScalarNumber && (
-                        <div className="flex items-center gap-1.5 flex-wrap">
+                        <div className="flex items-center gap-1.5 flex-wrap justify-end">
                           {/* Intent badge */}
                           {results?.intent && results.intent !== 'full' && (
-                            <span className={`inline-flex items-center gap-1 px-2 py-1 text-[10px] font-bold rounded-full border ${
+                            <span className={`badge ${
                               results.intent === 'personal'
-                                ? 'bg-purple-50 text-purple-700 border-purple-200'
+                                ? 'bg-info-soft text-info'
                                 : results.intent === 'complete_profile'
-                                ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                                : 'bg-blue-50 text-blue-700 border-blue-200'
+                                ? 'bg-brand/10 text-brand-fg'
+                                : 'badge-brand'
                             }`}>
                               {results.intent === 'personal'
-                                ? <><User className="w-3 h-3" /> Personal View</>
+                                ? <><User className="w-3 h-3" /> {t('results.personalView')}</>
                                 : results.intent === 'complete_profile'
-                                ? <><GraduationCap className="w-3 h-3" /> Complete Profile</>
-                                : <><GraduationCap className="w-3 h-3" /> Academic View</>}
+                                ? <><GraduationCap className="w-3 h-3" /> {t('results.completeProfile')}</>
+                                : <><GraduationCap className="w-3 h-3" /> {t('results.academicView')}</>}
                             </span>
                           )}
-                          {/* Kannada indicator */}
+                          {/* Kannada indicator — the script marker itself stays untranslated */}
                           {responseLanguage !== 'english' && (
-                            <span className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-bold rounded-full border bg-orange-50 text-orange-700 border-orange-200">
-                              ಕ•KN
-                            </span>
+                            <span className="badge badge-accent font-kannada">ಕ•KN</span>
                           )}
                           <button onClick={() => setReportOpen(true)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-sm transition-colors">
-                            <FileText className="w-3.5 h-3.5" /> Generate Report
+                            className="btn btn-primary btn-sm">
+                            <FileText className="w-3.5 h-3.5" /> {t('results.generateReport')}
                           </button>
                         </div>
                       )}
                     </div>
 
-                    <div className="p-5 space-y-4">
+                    <div className="p-4 sm:p-5 space-y-4">
                       {results.message && !isScalarNumber && (
-                        <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-900">
-                          <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
+                        <div className="flex items-start gap-2 p-3 rounded-lg bg-warn-soft text-sm text-warn">
+                          <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
                           <span>{results.message}</span>
                         </div>
                       )}
                       {results.total_count != null && !isScalarNumber && (
-                        <p className="text-sm font-semibold text-slate-700">
-                          Total: {results.total_count}
+                        <p className="t-label text-ink-soft">
+                          {t('results.total', { n: results.total_count })}
                         </p>
                       )}
                       {isScalarNumber ? (
-                        <div className="flex flex-col items-center justify-center py-16 px-4 bg-white">
-                          <span className="text-8xl font-black text-slate-900 tracking-tight select-all">
+                        <div className="flex flex-col items-center justify-center py-16 px-4">
+                          <span className="text-6xl sm:text-8xl font-black text-ink tracking-tight select-all tabular-nums break-all text-center">
                             {scalarValue}
                           </span>
                         </div>
                       ) : isGirlsNamesList ? (
-                        <div className="max-w-md mx-auto bg-white rounded-2xl border border-slate-200 p-6 shadow-sm my-4">
-                          <div className="text-xs font-bold text-slate-500 uppercase tracking-wider pb-3 border-b border-slate-100 flex items-center justify-between mb-2">
-                            <span className="flex items-center gap-1.5"><User className="w-4 h-4 text-pink-500" /> Female Student Names</span>
-                            <span className="bg-pink-50 text-pink-700 border border-pink-200 px-2.5 py-0.5 rounded-full text-xs font-semibold">
-                              {data.length} students
-                            </span>
+                        <div className="card-elev max-w-md mx-auto p-5 sm:p-6 my-4">
+                          <div className="text-[13px] font-bold text-ink-soft uppercase tracking-wider pb-3 border-b border-line flex items-center justify-between gap-3 mb-2">
+                            <span className="flex items-center gap-1.5 min-w-0"><User className="w-4 h-4 text-info flex-shrink-0" /> <span className="t-truncate">{t('results.femaleNames')}</span></span>
+                            <span className="badge badge-info flex-shrink-0">{t('results.studentsCount', { n: data.length })}</span>
                           </div>
-                          <div className="divide-y divide-slate-100 max-h-[500px] overflow-y-auto pr-1">
+                          <div className="divide-line max-h-[500px] overflow-y-auto pr-1">
                             {data.map((r, i) => (
-                              <div key={i} className="py-2.5 px-3 flex items-center gap-3 hover:bg-slate-50 rounded-lg transition-colors font-medium text-slate-800 text-sm">
-                                <span className="w-6 text-xs text-slate-400 font-mono">{i + 1}.</span>
-                                <span className="font-semibold">{r.name}</span>
+                              <div key={i} className="py-2.5 px-3 flex items-center gap-3 hover:bg-brand/[0.045] rounded-md font-medium text-ink text-[14px]">
+                                <span className="w-6 text-[13px] text-ink-faint font-mono tabular-nums flex-shrink-0">{i + 1}.</span>
+                                <span className="font-semibold min-w-0 break-words">{r.name}</span>
                               </div>
                             ))}
                           </div>
@@ -1712,69 +1968,69 @@ export default function Dashboard() {
                         </>
                       )}
                       {data.length === 0 && !suggestion && !isScalarNumber && (
-                        <div className="flex items-center justify-center py-8 text-slate-400 text-sm">
-                          {results.message || 'No records found.'}
+                        <div className="empty-state py-8">
+                          {results.message || t('results.noRecords')}
                         </div>
                       )}
                     </div>
 
                     {import.meta.env.DEV && results.query_debug && (
-                      <div className="border-t border-slate-100 bg-slate-50">
-                        <div className="flex items-center justify-between gap-3 px-5 py-2.5 flex-wrap">
+                      <div className="border-t border-line bg-sunken">
+                        <div className="flex items-center justify-between gap-3 px-4 sm:px-5 py-2.5 flex-wrap">
                           <button
                             type="button"
                             onClick={() => setQueryDebugOpen(value => !value)}
                             aria-expanded={queryDebugOpen}
-                            className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 hover:text-blue-700 min-w-0"
+                            className="inline-flex items-center gap-2 text-[13px] font-semibold text-ink-soft hover:text-brand-fg min-w-0"
                           >
                             {queryDebugOpen ? <ChevronUp className="w-3.5 h-3.5 shrink-0" /> : <ChevronDown className="w-3.5 h-3.5 shrink-0" />}
-                            <span className="truncate">Query Execution Details</span>
+                            <span className="truncate">{t('debug.title')}</span>
                           </button>
-                          <div className="flex items-center gap-2 text-[11px] text-slate-500 flex-wrap">
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white border border-slate-200">
+                          <div className="flex items-center gap-2 text-[12px] text-ink-mute flex-wrap">
+                            <span className="badge badge-quiet">
                               <Clock className="w-3 h-3" />
-                              {((results.execution_time ?? results.query_debug.execution_time ?? 0) * 1000).toFixed(0)} ms
+                              <span className="tabular-nums">{((results.execution_time ?? results.query_debug.execution_time ?? 0) * 1000).toFixed(0)} ms</span>
                             </span>
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white border border-slate-200">
+                            <span className="badge badge-quiet">
                               <TableIcon className="w-3 h-3" />
-                              {results.query_debug.returned_row_count ?? data.length} row(s)
+                              {t('debug.rows', { n: results.query_debug.returned_row_count ?? data.length })}
                             </span>
                           </div>
                         </div>
                         {queryDebugOpen && (
-                          <div className="px-5 pb-4 space-y-3 text-xs text-slate-700 max-w-full overflow-hidden">
+                          <div className="px-4 sm:px-5 pb-4 space-y-3 text-[13px] text-ink-soft max-w-full overflow-hidden">
                             <div className="flex justify-end">
-                              <button type="button" onClick={() => setQueryDebugOpen(false)} className="text-[11px] font-medium text-slate-500 hover:text-slate-800">
-                                Close
+                              <button type="button" onClick={() => setQueryDebugOpen(false)} className="text-[12px] font-medium text-ink-mute hover:text-ink">
+                                {t('debug.close')}
                               </button>
                             </div>
                             {results.query_debug.normalized_query && (
-                              <p className="break-words"><strong className="text-slate-800">Normalized:</strong> {maskSensitive(results.query_debug.normalized_query)}</p>
+                              <p className="break-words"><strong className="text-ink">{t('debug.normalized')}</strong> {maskSensitive(results.query_debug.normalized_query)}</p>
                             )}
                             <div className="flex flex-wrap gap-x-4 gap-y-1">
-                              <p><strong className="text-slate-800">Intent:</strong> {results.query_debug.intent}</p>
-                              <p><strong className="text-slate-800">Validation:</strong> {results.query_debug.validation}</p>
+                              <p><strong className="text-ink">{t('debug.intent')}</strong> {results.query_debug.intent}</p>
+                              <p><strong className="text-ink">{t('debug.validation')}</strong> {results.query_debug.validation}</p>
                             </div>
                             {results.query_debug.conditions?.length > 0 && (
                               <div>
-                                <p className="font-semibold text-slate-800 mb-1">Resolved filters</p>
+                                <p className="font-semibold text-ink mb-1">{t('debug.filters')}</p>
                                 <ul className="flex flex-wrap gap-1.5">
                                   {results.query_debug.conditions.map((condition, index) => (
-                                    <li key={index} className="px-2 py-0.5 bg-white border border-slate-200 rounded-md break-words">{describeCondition(condition)}</li>
+                                    <li key={index} className="badge badge-quiet max-w-full">{describeCondition(condition)}</li>
                                   ))}
                                 </ul>
                               </div>
                             )}
                             {results.query_debug.sql && (
                               <div>
-                                <p className="font-semibold text-slate-800 mb-1">SQL (masked)</p>
-                                <pre className="p-3 rounded-md bg-slate-900 text-green-300 text-[11px] font-mono overflow-x-auto max-w-full whitespace-pre-wrap break-words">{maskSensitive(results.query_debug.sql)}</pre>
+                                <p className="font-semibold text-ink mb-1">{t('debug.sql')}</p>
+                                <pre className="p-3 rounded-md bg-brand-deep text-ok text-[12px] font-mono overflow-x-auto max-w-full whitespace-pre-wrap break-words">{maskSensitive(results.query_debug.sql)}</pre>
                               </div>
                             )}
                             {results.query_debug.parameters != null && (
                               <div>
-                                <p className="font-semibold text-slate-800 mb-1">Parameters (masked)</p>
-                                <pre className="p-3 rounded-md bg-slate-900 text-slate-100 text-[11px] font-mono overflow-x-auto max-w-full whitespace-pre-wrap break-words">{JSON.stringify(maskDebugParameters(results.query_debug.parameters), null, 2)}</pre>
+                                <p className="font-semibold text-ink mb-1">{t('debug.parameters')}</p>
+                                <pre className="p-3 rounded-md bg-brand-deep text-ink-soft text-[12px] font-mono overflow-x-auto max-w-full whitespace-pre-wrap break-words">{JSON.stringify(maskDebugParameters(results.query_debug.parameters), null, 2)}</pre>
                               </div>
                             )}
                           </div>
@@ -1802,69 +2058,69 @@ export default function Dashboard() {
 
       {/* ── Confirm Modal ── */}
       {confirmModal.isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full overflow-hidden">
-            <div className={`p-5 ${secondConfirm ? 'bg-red-50' : 'bg-amber-50'} border-b border-slate-100`}>
+        <div className="backdrop" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
+          <div className="modal-panel anim-scale-in max-w-md">
+            <div className={`p-5 border-b border-line ${secondConfirm ? 'bg-err-soft' : 'bg-warn-soft'}`}>
               <div className="flex items-center gap-3">
-                <div className={`p-2 rounded-full ${secondConfirm ? 'bg-red-100 text-red-600' : 'bg-amber-100 text-amber-600'}`}>
+                <div className={`p-2 rounded-full ${secondConfirm ? 'bg-err/15 text-err' : 'bg-warn/15 text-warn'}`}>
                   <AlertTriangle className="w-5 h-5" />
                 </div>
-                <h3 className={`text-base font-bold ${secondConfirm ? 'text-red-800' : 'text-amber-800'}`}>
-                  {secondConfirm ? 'Final Confirmation' : `Confirm ${confirmModal.data?.action_type}`}
+                <h3 id="confirm-modal-title" className={`t-card ${secondConfirm ? 'text-err' : 'text-warn'}`}>
+                  {secondConfirm ? t('confirm.finalTitle') : t('confirm.title', { action: confirmModal.data?.action_type })}
                 </h3>
               </div>
             </div>
             <div className="p-5 space-y-3">
-              <p className="text-slate-600 text-sm">
+              <p className="t-body text-ink-soft">
                 {secondConfirm
                   ? (confirmModal.data?.message
-                      ? `Last check before writing: ${confirmModal.data.message}`
-                      : 'Confirm this operation now.')
+                      ? t('confirm.lastCheck', { message: confirmModal.data.message })
+                      : t('confirm.confirmNow'))
                   : confirmModal.data?.message
                     || (confirmModal.data?.confirm_endpoint
-                      ? `You are about to ${confirmModal.data?.action_type === 'FEE_UPDATE' ? 'update this student’s fees' : 'record a lifecycle change'}.`
+                      ? (confirmModal.data?.action_type === 'FEE_UPDATE' ? t('confirm.updateFees') : t('confirm.lifecycleChange'))
                       : confirmModal.data?.action_type === 'DELETE'
-                        ? 'Warning: This will permanently remove the selected student data. Do you want to continue?'
-                        : `You are about to execute a ${confirmModal.data?.action_type} operation.`)}
+                        ? t('confirm.deleteWarning')
+                        : t('confirm.executePrefix', { action: confirmModal.data?.action_type }))}
               </p>
               {/* Admin-only commit gate for NL fee / lifecycle previews */}
               {confirmModal.data?.role_restricted === 'Admin' &&
                 String(role).toLowerCase() !== 'admin' && (
-                <div className="flex items-center gap-2 p-2.5 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">
+                <div className="flex items-center gap-2 p-2.5 rounded-md bg-err-soft text-[13px] text-err">
                   <ShieldAlert className="w-3.5 h-3.5 flex-shrink-0" />
-                  <span>This change is <strong>Admin-only</strong>. You don’t have permission to execute it.</span>
+                  <span>{t('confirm.adminOnly')}</span>
                 </div>
               )}
               {/* UNDO notice for deletes */}
               {!secondConfirm && confirmModal.data?.action_type === 'DELETE' && (
-                <div className="flex items-center gap-2 p-2.5 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-700">
+                <div className="flex items-center gap-2 p-2.5 rounded-md bg-info-soft text-[13px] text-info">
                   <RotateCcw className="w-3.5 h-3.5 flex-shrink-0" />
-                  <span>An <strong>UNDO</strong> option will appear for 30 seconds after deletion.</span>
+                  <span>{t('confirm.undoNote')}</span>
                 </div>
               )}
               {confirmModal.data?.query && (
-                <div className="bg-slate-900 p-3 rounded-lg overflow-x-auto">
-                  <code className="text-xs font-mono text-green-400 whitespace-pre-wrap">
+                <div className="bg-brand-deep p-3 rounded-md overflow-x-auto">
+                  <code className="text-[12px] font-mono text-ok whitespace-pre-wrap break-words">
                     {confirmModal.data.query}
                   </code>
                 </div>
               )}
             </div>
-            <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
+            <div className="p-4 border-t border-line bg-sunken flex justify-end gap-3">
               <button onClick={() => setConfirmModal({ isOpen: false, data: null })}
-                className="px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-200 rounded-lg transition-colors" disabled={isLoading}>
-                Cancel
+                className="btn btn-ghost btn-sm" disabled={isLoading}>
+                {t('confirm.cancel')}
               </button>
               {!secondConfirm ? (
                 <button onClick={() => setSecondConfirm(true)}
                   disabled={confirmModal.data?.role_restricted === 'Admin' && String(role).toLowerCase() !== 'admin'}
-                  className="px-4 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-                  Yes, proceed
+                  className="btn btn-accent btn-sm">
+                  {t('confirm.proceed')}
                 </button>
               ) : (
                 <button onClick={executeConfirmed} disabled={isLoading}
-                  className="px-4 py-2 text-sm font-bold text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors flex items-center gap-2">
-                  {isLoading ? 'Executing...' : 'Confirm & Execute'}
+                  className="btn btn-danger btn-sm">
+                  {isLoading ? t('confirm.executing') : t('confirm.execute')}
                 </button>
               )}
             </div>

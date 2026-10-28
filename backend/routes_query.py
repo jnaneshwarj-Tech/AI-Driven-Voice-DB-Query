@@ -68,6 +68,7 @@ from kannada_processor import (
     is_structural_word as kn_is_structural_word,
     get_response_labels,
 )
+from security_middleware import sanitize_input
 
 router = APIRouter(prefix="/api/query", tags=["Query Engine"])
 logger = logging.getLogger(__name__)
@@ -1038,6 +1039,37 @@ def _exact_status_label(eq: str) -> str | None:
     return None
 
 
+# The year a student is scheduled to leave, expressed in SQL. It mirrors
+# graduation_manager.parse_usn_full exactly: admission batch + course duration,
+# the duration being the leading digit of the VTU USN (4 = 4-year BE). Verified
+# against parse_usn_full for every stored student, and it is what the profile,
+# analytics and Lifecycle screens already show.
+_GRADUATION_YEAR_SQL = ("CAST(s.admission_year AS SIGNED) + CAST(LEFT(s.usn, 1) AS SIGNED)")
+
+
+_GRAD_WORDS = ("graduating", "graduated", "graduates", "graduation", "graduate")
+
+
+def _fix_graduation_typos(s: str) -> str:
+    """Repair misspellings of the graduation words ('grduating', 'graduting',
+    'graduaton') so the lifecycle branch sees them. Staff type these phonetically
+    and a dropped letter used to silently turn a graduation cohort question into
+    a name search over the whole sentence. Same first letter plus high
+    similarity keeps unrelated 'g' words away."""
+    def _fix(tok: str) -> str:
+        if len(tok) < 6 or not tok.isalpha() or tok in _GRAD_WORDS:
+            return tok
+        best, score = None, 0.75
+        for canon in _GRAD_WORDS:
+            if tok[0] != canon[0]:
+                continue
+            ratio = difflib.SequenceMatcher(None, tok, canon).ratio()
+            if ratio > score:
+                best, score = canon, ratio
+        return best or tok
+    return " ".join(_fix(w) for w in s.split(" "))
+
+
 def _build_lifecycle_query(nq: str) -> dict | None:
     """Deterministic SQL for Student Lifecycle intents (spec §9): dropout,
     discontinued, readmission pending/approved-not-joined, rejoined, cleared
@@ -1052,7 +1084,7 @@ def _build_lifecycle_query(nq: str) -> dict | None:
     no lifecycle keyword is present it returns None so the ordinary pipeline
     (backlogs / fees / demographics / LLM) proceeds untouched.
     """
-    eq = (nq or "").strip().lower()
+    eq = _fix_graduation_typos((nq or "").strip().lower())
     if not eq:
         return None
     is_count = bool(re.search(r'\b(?:how\s+many|count|number\s+of)\b', eq))
@@ -1067,7 +1099,13 @@ def _build_lifecycle_query(nq: str) -> dict | None:
     _readmit_app = bool(re.search(r'\breadmission\b.*\bapprov\w*\b|\bapprov\w*\b.*\breadmission\b|\bgot\s+readmission\b', eq))
     _not_joined  = bool(re.search(r'\bnot\s+(?:yet\s+)?(?:joined|rejoined|re-?joined|rejoin|come)\b|\bwithout\s+joining\b|\byet\s+to\s+(?:join|rejoin)\b|\bnot\s+joined\b', eq))
     _rejoined    = bool(re.search(r'\bre-?join(?:ed|ing)?\b|\bmatte\s+(?:join|sere)\w*\b|\bcome\s+back\b|\bback\s+to\s+college\b|\bresum\w*\b|\breattended\b', eq))
-    _graduated   = bool(re.search(r'\bgraduat\w*\b|\bpassed\s+out\b', eq))
+    # "2027 batch out student list" / "pass out batch" is how staff ask for the
+    # cohort that LEAVES in that year. Without this the year in front of "batch"
+    # was read as the admission year, so the question about the 2027 outgoing
+    # cohort searched for students admitted in 2027 — a batch that does not exist
+    # yet — and answered with an empty list.
+    _batch_out  = bool(re.search(r'\bpass(?:ed|ing)?\s+out\b|\bbatch\s+out\b|\bout\s+batch\b|\boutgoing\b|\bpassout\b', eq))
+    _graduated   = bool(re.search(r'\bgraduat\w*\b|\bpassed\s+out\b', eq)) or _batch_out
     _transferred = bool(re.search(r'\btransferred?\b', eq))
 
     # "cleared backlog after rejoining"
@@ -1097,14 +1135,48 @@ def _build_lifecycle_query(nq: str) -> dict | None:
     _batch_m = re.search(r'\b(\d{4})\b[\s-]*\b(?:batch|admission|year\s*of\s*admission)\b', eq)
     if not _batch_m:
         _batch_m = re.search(r'\b(?:batch|admission)\b[^0-9]*\b(\d{4})\b', eq)
+    # The year named with "out" is the leaving year ("2027 batch out", "passed
+    # out in 2027"). Only the tight forms count, so "dropped out in 2024" keeps
+    # its old dropout-year meaning.
+    _out_year = None
+    _oy_m = (re.search(r'\b(\d{4})\s*(?:batch\s+)?out\b', eq)
+             or re.search(r'\bout\s+batch\s*(?:of|in|for)?\s*(\d{4})\b', eq)
+             or re.search(r'\b(?:outgoing|out)\s+(?:of|in|for|batch)?\s*(\d{4})\b', eq)
+             or re.search(r'\b(?:passed|pass|passing|graduat\w*)\s+out\s*(?:of|in|for|from)?\s*(\d{4})\b', eq))
+    if _oy_m:
+        _out_year = int(_oy_m.group(1))
+    if _batch_m and _out_year == int(_batch_m.group(1)):
+        _batch_m = None
     _batch_flt = f" AND s.admission_year = {int(_batch_m.group(1))}" if _batch_m else ""
 
     # Effective / dropout year ("dropped out in 2024" — a bare 4-digit year).
     _yr_flt = ""
+    _batch_year = int(_batch_m.group(1)) if _batch_m else None
     if not _batch_m:
         _yr_m = re.search(r'\b(?:in|during|since)\s+(\d{4})\b', eq)
         if _yr_m:
             _yr_flt = f" AND YEAR(ls.effective_date) = {int(_yr_m.group(1))}"
+
+    # Graduation cohort ("students graduating in 2027", "show 2027 graduates").
+    # The year a batch leaves is a property of the batch, not of a status change:
+    # nothing is written to the lifecycle register when a cohort simply finishes,
+    # so answering this from `current_status = Graduated` alone returned an empty
+    # list for every graduation question. The projection below is the same
+    # formula graduation_manager.parse_usn_full uses everywhere else in the app
+    # (verified equal for all 220 stored students): admission batch + course
+    # duration, where the duration is the leading digit of the USN. A recorded
+    # Graduated status with its own effective year still counts, so a student who
+    # left early or late appears in the year the college actually registered.
+    _grad_year = None
+    if _graduated:
+        if _out_year is not None:
+            _grad_year = _out_year
+        # When a batch year is also named ("2023 batch graduating in 2027"), the
+        # cohort year is the one that is not the batch.
+        for _cand in re.findall(r'\b(?:19|20)\d{2}\b', eq):
+            if _batch_year is None or int(_cand) != _batch_year:
+                _grad_year = int(_cand)
+                break
 
     # Reason category ("discontinued due to financial problems", "for personal reasons").
     # Only classify when an explicit reason cue is present AND the following text hits a
@@ -1187,9 +1259,16 @@ def _build_lifecycle_query(nq: str) -> dict | None:
     # before the register was re-synced — findable under the stale status and
     # invisible under the one the Lifecycle tab shows.
     status_flt = f"COALESCE(ls.current_status, s.lifecycle_status) IN ({placeholders})"
-    where = status_flt + _sem_flt + _batch_flt + _yr_flt + _reason_flt + _rejoin_discont_flt
-
-    params = list(status_set)
+    if _grad_year is not None and status_set == [LC.STATUS_GRADUATED]:
+        # Cohort projection first, register second — see _GRADUATION_YEAR_SQL.
+        where = (f"({_GRADUATION_YEAR_SQL} = %s OR "
+                 f"({status_flt} AND "
+                 f"COALESCE(YEAR(ls.effective_date), {_GRADUATION_YEAR_SQL}) = %s))")
+        where += _sem_flt + _batch_flt + _reason_flt + _rejoin_discont_flt
+        params = [_grad_year] + list(status_set) + [_grad_year]
+    else:
+        where = status_flt + _sem_flt + _batch_flt + _yr_flt + _reason_flt + _rejoin_discont_flt
+        params = list(status_set)
 
     # Discontinued-with-unpaid-fees: intersect the status set with unpaid USNs.
     if _fees_pending:
@@ -1200,12 +1279,15 @@ def _build_lifecycle_query(nq: str) -> dict | None:
                     "params": []}
         uph = ",".join(["%s"] * len(unpaid))
         where += f" AND s.usn IN ({uph})"
-        params = list(status_set) + unpaid
+        params = params + unpaid
 
     # Rejoined-after-clearing-backlogs: no open backlog for that student.
     if _cleared_bl and _rejoined:
         where += (" AND s.usn NOT IN "
                   "(SELECT sb.usn FROM student_backlogs sb WHERE sb.cleared = 0)")
+
+    # A graduation answer without the year it is about would just be a list.
+    _grad_proj = f", {_GRADUATION_YEAR_SQL} AS graduation_year" if _grad_year is not None else ""
 
     if is_count and _per_sem:
         return {"operation": "select", "sql": (
@@ -1228,9 +1310,54 @@ def _build_lifecycle_query(nq: str) -> dict | None:
             f"COALESCE(ls.current_status, s.lifecycle_status) AS current_status, "
             f"ls.effective_date, ls.last_enrolled_semester AS last_semester, "
             f"ls.last_enrolled_academic_year AS last_academic_year, "
-            f"ls.scheme, ls.reason, {_cgpa_expr} AS cgpa "
+            f"ls.scheme, ls.reason, {_cgpa_expr} AS cgpa"
+            f"{_grad_proj} "
             f"{base_join} WHERE {where} {order}")
     return {"operation": "select", "sql": proj, "params": params}
+
+
+def _occupation_companion_sql(eq: str) -> tuple[str, list]:
+    """WHERE fragments for the conditions that ride along with an occupation
+    question: "father occupation is farmer in 23 batch", "... in 4th year",
+    "... in 7 sem CSE students".
+
+    The occupation answers are built by their own branch, which historically saw
+    only the occupation and dropped everything else in the sentence — so a
+    question about the 2023 batch was answered with every farmer's son in the
+    college. Recognising the companions here keeps that branch authoritative
+    (the combined engine reads "father occupation is farmer" as a father NAME)
+    while honouring the rest of the request. Only literal comparisons with
+    bound parameters are emitted, so no question text reaches the SQL itself.
+    """
+    frags: list[str] = []
+    params: list = []
+
+    batch_m = (re.search(r"\b(\d{2}|\d{4})\s*(?:batch|batchof|admission)\b", eq)
+               or re.search(r"\b(?:batch|admission(?:\s+year)?)\s+(?:of|is|in|for)?\s*(\d{2}|\d{4})\b", eq))
+    if batch_m:
+        raw = int(batch_m.group(1))
+        frags.append("s.admission_year = %s")
+        params.append(raw if raw >= 100 else 2000 + raw)
+
+    _csem, _cyear = _current_academic_fields_sql("s")
+    year_m = re.search(r"\b(\d{1,2})(?:st|nd|rd|th)?\s*(?:year|yr)\b", eq)
+    if year_m:
+        frags.append(f"{_cyear} = %s")
+        params.append(int(year_m.group(1)))
+
+    sem_m = re.search(r"\b(\d{1,2})(?:st|nd|rd|th)?\s*sem(?:ester)?\b", eq)
+    if sem_m:
+        frags.append(f"{_csem} = %s")
+        params.append(int(sem_m.group(1)))
+
+    branches = sorted(set(_rag_extract_branches(eq) or []))
+    if branches:
+        frags.append(" OR ".join(["s.branch LIKE %s"] * len(branches)))
+        params.extend(f"%{b}%" for b in branches)
+
+    if not frags:
+        return "", []
+    return " AND (" + " AND ".join(frags) + ")", params
 
 
 _OCC_KEYWORDS = ("occupation", "profession", "designation")
@@ -1455,6 +1582,19 @@ def _column_values(column: str) -> list[str]:
         values = []
     _DISTINCT_VALUES[key] = values
     return values
+
+
+def _name_fragment_matches(fragment: str) -> bool:
+    """True when a phrase names at least one stored student, whole word by whole
+    word: "manoj" covers "Manoj J R" and "Rahul Manoj", while "with backlogs" or
+    "male" name nobody and stay attribute vocabulary. Mistyped names are not this
+    helper's job — the fuzzy layer resolves them once a query returns zero rows."""
+    frag = re.sub(r"\s+", " ", (fragment or "").strip()).casefold()
+    if not frag:
+        return False
+    pattern = re.compile(
+        r"(?<![\w'-])" + re.escape(frag).replace(r"\ ", r"\s+") + r"(?![\w'-])")
+    return any(pattern.search(name.casefold()) for name in _column_values("name"))
 
 
 def _closest_column_value(column: str, term: str) -> str | None:
@@ -1883,7 +2023,15 @@ def _build_dynamic_field_query(nq: str) -> dict | None:
             val_m = re.search(r"\b(?:mother|father)(?:['’]s)?\s+(?:occupation|job|work|profession)\s+(?:of\s+)?([a-z][a-z ]*)", eq_occ)
         value = ""
         if val_m:
-            value = re.sub(r"\b(?:students?|having|with|whose|that|who|the|a|an)\b.*$", "", val_m.group(1)).strip()
+            # The value ends where the next clause begins. Without the
+            # prepositions the trailing words were glued onto the occupation
+            # ("farmer in 23 batch" searched for '%farmerin%' and matched
+            # nothing), which turned a real cohort into an empty answer.
+            value = re.sub(
+                r"\b(?:students?|having|with|whose|that|who|the|a|an|in|into|of|at|and|"
+                r"is|are|was|were|belongs?|belonging|batch|admission|year|yr|sem|semester|"
+                r"study|studying|class|cgpa|sgpa|marks|from)\b.*$",
+                "", val_m.group(1)).strip()
         if not value:
             # "<value> father occupation" ("show Carpenter father occupation
             # students"): the value sits BEFORE the keyword, which neither pattern
@@ -1903,10 +2051,11 @@ def _build_dynamic_field_query(nq: str) -> dict | None:
                 matched, ratio = _best_value_match(field, candidate)
                 if matched and ratio >= 0.6:
                     value = candidate
+        comp_flt, comp_params = _occupation_companion_sql(eq)
         if value:
             # spacing-tolerant so "house wife" also matches stored "housewife".
-            return {"operation": "select", "sql": f"SELECT s.usn, s.name, s.{field} FROM students s WHERE REPLACE(LOWER(s.{field}), ' ', '') LIKE %s {order}", "params": [f"%{value.replace(' ', '')}%"]}
-        return {"operation": "select", "sql": f"SELECT s.usn, s.name, s.{field} FROM students s WHERE s.{field} IS NOT NULL AND s.{field} != '' {order}", "params": []}
+            return {"operation": "select", "sql": f"SELECT s.usn, s.name, s.branch, s.current_sem, s.{field} FROM students s WHERE REPLACE(LOWER(s.{field}), ' ', '') LIKE %s{comp_flt} {order}", "params": [f"%{value.replace(' ', '')}%"] + comp_params}
+        return {"operation": "select", "sql": f"SELECT s.usn, s.name, s.branch, s.current_sem, s.{field} FROM students s WHERE s.{field} IS NOT NULL AND s.{field} != ''{comp_flt} {order}", "params": comp_params}
 
     # "father is (a) teacher" / "mothers are farmers" / "mother works as a nurse"
     # — occupation intent with no keyword. Decided by the DATA: the value is
@@ -1920,7 +2069,9 @@ def _build_dynamic_field_query(nq: str) -> dict | None:
         eq_occ)
     if cop:
         value = re.sub(
-            r"\b(?:students?|having|with|whose|that|who|the|a|an)\b.*$", "",
+            r"\b(?:students?|having|with|whose|that|who|the|a|an|in|into|of|at|and|"
+            r"is|are|was|were|belongs?|belonging|batch|admission|year|yr|sem|semester|"
+            r"study|studying|class|cgpa|sgpa|marks|from)\b.*$", "",
             cop.group("value")).strip(" .,;:")
         is_mother = cop.group("parent") == "mother"
         occ_field = "mother_occupation" if is_mother else "father_occupation"
@@ -1934,10 +2085,11 @@ def _build_dynamic_field_query(nq: str) -> dict | None:
                 variants.add(stem + "s")     # teacher  -> teachers
             conds = " OR ".join(
                 [f"REPLACE(LOWER(s.`{occ_field}`), ' ', '') LIKE %s"] * len(variants))
+            comp_flt, comp_params = _occupation_companion_sql(eq)
             return {"operation": "select",
-                    "sql": f"SELECT s.usn, s.name, s.{occ_field} FROM students s "
-                           f"WHERE ({conds}) {order}",
-                    "params": [f"%{v}%" for v in sorted(variants)]}
+                    "sql": f"SELECT s.usn, s.name, s.branch, s.current_sem, s.{occ_field} "
+                           f"FROM students s WHERE ({conds}){comp_flt} {order}",
+                    "params": [f"%{v}%" for v in sorted(variants)] + comp_params}
 
 
     # ── Kannada medium ────────────────────────────────────────────────────────
@@ -2073,6 +2225,37 @@ def _detect_rank_limit(query: str) -> int | None:
     if m:
         return int(m.group(1)) if m.group(1).isdigit() else _RANK_CARDINAL[m.group(1)]
     return None
+
+
+# Words that say the sentence is a question about a group rather than the name
+# of one person. Anything else that survives the bare-name gate has to be an
+# actual student's name in the college's own records.
+_BARE_NAME_STOP_RE = re.compile(
+    r"\b(?:show|list|display|find|search|get|give|tell|print|me|count|how|many|"
+    r"number|all|every|each|student|students|detail|details|info|information|"
+    r"profile|record|records|data|complete|full|about|whose|which|who|with|having|"
+    r"and|or|the|a|an|of|for|from|in|at|is|are|to|my|please|cgpa|sgpa|marks|"
+    r"semester|sem|batch|year|fees|fee|backlog|backlogs|arrear|arrears)\b", re.I)
+
+
+def _bare_name_phrase(nq: str) -> str | None:
+    """Return the name when a question is nothing but a student's name.
+
+    Staff type "Karthik S L" and expect that student back. No deterministic
+    branch filtered on an unlabelled name, so the question went to the LLM — and
+    while the LLM was down a lookup MySQL answers in milliseconds came back as
+    "AI service temporarily unavailable". The gate is the college's own data:
+    the phrase must match a stored student name, so a stray word that is not
+    anybody's name can never take this path.
+    """
+    text = (nq or "").strip().strip("?.!,;:\"' ")
+    if not text or len(text) > 60 or re.search(r"\d", text):
+        return None
+    if _BARE_NAME_STOP_RE.search(text):
+        return None
+    if not 1 <= len(text.split()) <= 5:
+        return None
+    return text if _column_contains_value(text, "name") else None
 
 
 def build_deterministic_student_query(nq: str) -> dict | None:
@@ -2230,6 +2413,28 @@ def build_deterministic_student_query(nq: str) -> dict | None:
             add_filter_condition(
                 "name", "CONTAINS", _nm,
                 "LOWER(TRIM(s.name)) LIKE %s", [f"%{_nm.lower()}%"],
+            )
+
+    # ── Bare name after the plural: "students manoj", "list students Manoj J R" ─
+    # Staff drop the connector as often as they drop the spelling. Left to the LLM,
+    # a name listing comes back with a marks join — one row per semester, so the
+    # same student reads as a different "section" each time — and a cold model
+    # cascade can hold the request for a minute. The fragment becomes a name filter
+    # only when the stored names really carry that word, so "students male" or
+    # "students with backlogs" stay attribute filters and find no false name match.
+    if not _name_list_m:
+        _bare_name_m = re.search(
+            r"\bstudents\b\s+(?:named\s+|called\s+|name\s+|by\s+name\s+)?"
+            r"([a-z][a-z .'-]{1,40}?)"
+            r"(?=\s+(?:from|in|of|with|having|who|whose|and|branch|semester|sem|cgpa|sgpa|"
+            r"aged?|age|blood|father|mother|gender|male|female|study|studying)\b|[?.!,;]|$)",
+            query,
+        )
+        _bn = re.sub(r"\s+", " ", _bare_name_m.group(1)).strip(" .'-") if _bare_name_m else ""
+        if _name_fragment_matches(_bn):
+            add_filter_condition(
+                "name", "CONTAINS", _bn,
+                "LOWER(TRIM(s.name)) LIKE %s", [f"%{_bn.lower()}%"],
             )
 
     # ── Backlogs / arrears as one filter among many ───────────────────────────
@@ -3377,6 +3582,17 @@ def build_deterministic_student_query(nq: str) -> dict | None:
         # mis-parses "top" as a student name). Handle it deterministically with a
         # neutral predicate so the ORDER BY / LIMIT / NULL-exclusion below applies.
         if _detect_rank_limit(query) is None:
+            _nm = _bare_name_phrase(text)
+            if _nm:
+                return {
+                    "operation": "select",
+                    "sql": ("SELECT s.usn, s.name, s.branch, s.current_sem, s.student_type "
+                            "FROM students s "
+                            "WHERE REPLACE(LOWER(s.name), ' ', '') LIKE %s ORDER BY s.usn ASC"),
+                    "params": [f"%{_nm.replace(' ', '')}%"],
+                    "ast": {"intent": "complete_profile", "conditions": [],
+                            "logical_operator": "AND"},
+                }
             return None
         where_clauses.append("1=1")
 
@@ -4004,6 +4220,10 @@ def _detect_intent(nq: str) -> str:
     if is_complete_profile_intent(nq) or _COMPLETE_PROFILE_RE.search(nq):
         return 'complete_profile'
 
+    # A question that is only somebody's name asks for that person's record.
+    if _bare_name_phrase(nq):
+        return 'complete_profile'
+
     # Multi-record filter: "students without X", "list students with X", etc.
     # Must be detected BEFORE specific_field to avoid misclassification.
     if _MULTI_RECORD_FILTER_RE.search(nq):
@@ -4293,7 +4513,9 @@ def _filter_by_intent(rows: list[dict], intent: str, natural_query: str | None =
             if match:
                 requested.add(column)
         if requested:
-            return [{k: v for k, v in row.items() if k in requested} for row in rows]
+            keep = set(requested)
+            keep.update({'usn', 'name', 'dynamic_data'})
+            return [{k: v for k, v in row.items() if k in keep} for row in rows]
 
     return rows
 
@@ -4588,7 +4810,7 @@ def generate_query(request: QueryRequest, current_user: dict = Depends(get_curre
         request.debug
         and os.getenv("APP_ENV", "development").casefold() not in {"production", "prod"}
     )
-    nq = request.natural_query.strip()
+    nq = sanitize_input(request.natural_query.strip())
     language = getattr(request, 'language', 'english')
     response_language = getattr(request, 'response_language', 'english')
 
@@ -4785,13 +5007,10 @@ def generate_query(request: QueryRequest, current_user: dict = Depends(get_curre
             else generate_sql_query(nq, current_user["role"])
         )
     if not result["success"]:
-        error_message = str(result.get("error_msg", ""))
-        if error_message.startswith("ERROR:"):
-            raise HTTPException(
-                503,
-                "AI service temporarily unavailable. This query could not be safely resolved locally.",
-            )
-        raise HTTPException(400, "Could not generate a safe database query.")
+        raise HTTPException(
+            400,
+            "Could not generate a safe database query. The query may contain unsupported fields, ambiguous terms, or cannot be resolved safely.",
+        )
 
     query_dict = _enforce_specific_select(nq, result["query_dict"])
     # A structured update skips the SQL-shape validation below, so the role rule

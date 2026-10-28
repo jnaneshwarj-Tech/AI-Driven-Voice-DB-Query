@@ -2,6 +2,9 @@ import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Lock, AlertCircle } from 'lucide-react';
 import api from '../services/api';
+import { getUserMessage } from '../services/errors';
+import { useI18n } from '../context/LanguageContext';
+import AuthShell from '../components/AuthShell';
 
 export default function ResetPassword() {
   const { token } = useParams();
@@ -10,6 +13,7 @@ export default function ResetPassword() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const { t } = useI18n();
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -23,31 +27,64 @@ export default function ResetPassword() {
       });
       navigate('/login', { state: { resetComplete: true } });
     } catch (err) {
-      setError(err.response?.data?.detail || 'Unable to reset password.');
+      setError(getUserMessage(err, t('auth.resetFailed')));
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 flex items-center justify-center px-4">
-      <div className="w-full max-w-md bg-slate-800/70 p-8 rounded-2xl border border-slate-700 shadow-2xl">
-        <h1 className="text-2xl font-bold text-white">Set a new password</h1>
-        <p className="mt-2 text-sm text-slate-400">Choose a password with at least 6 characters.</p>
-        {error && <div className="mt-6 rounded-lg bg-red-500/10 p-4 border border-red-500/20 flex gap-3 text-red-400"><AlertCircle className="w-5 h-5" /><p className="text-sm">{error}</p></div>}
-        <form className="mt-6 space-y-5" onSubmit={handleSubmit}>
-          <div>
-            <label className="block text-sm font-medium text-slate-300">New password</label>
-            <div className="mt-1 relative"><Lock className="absolute left-3 top-3 h-5 w-5 text-slate-500" /><input type="password" required minLength="6" value={password} onChange={(e) => setPassword(e.target.value)} className="block w-full pl-10 pr-3 py-2.5 border border-slate-600 rounded-xl bg-slate-900/50 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500" /></div>
+    <AuthShell heading={t('reset.heading')} sub={t('reset.sub')} footnote={t('auth.footnote')}>
+      {error && (
+        <div role="alert" className="mb-5 flex items-start gap-2.5 rounded-md border border-err/25 bg-err/10 p-3.5 text-err">
+          <AlertCircle className="mt-0.5 h-[18px] w-[18px] flex-shrink-0" aria-hidden="true" />
+          <p className="text-[13.5px] font-medium leading-snug">{error}</p>
+        </div>
+      )}
+
+      <form className="space-y-5" onSubmit={handleSubmit}>
+        <div>
+          <label className="field-label" htmlFor="reset-new">{t('auth.newPassword')}</label>
+          <div className="relative">
+            <Lock className="pointer-events-none absolute left-3 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-ink-faint" aria-hidden="true" />
+            <input
+              id="reset-new"
+              type="password"
+              required
+              minLength="6"
+              autoComplete="new-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="input pl-10"
+            />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-300">Confirm password</label>
-            <div className="mt-1 relative"><Lock className="absolute left-3 top-3 h-5 w-5 text-slate-500" /><input type="password" required minLength="6" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} className="block w-full pl-10 pr-3 py-2.5 border border-slate-600 rounded-xl bg-slate-900/50 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500" /></div>
+        </div>
+        <div>
+          <label className="field-label" htmlFor="reset-confirm">{t('auth.confirmPassword')}</label>
+          <div className="relative">
+            <Lock className="pointer-events-none absolute left-3 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-ink-faint" aria-hidden="true" />
+            <input
+              id="reset-confirm"
+              type="password"
+              required
+              minLength="6"
+              autoComplete="new-password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              className="input pl-10"
+            />
           </div>
-          <button type="submit" disabled={loading} className="w-full py-2.5 rounded-xl text-sm font-semibold text-white bg-blue-600 hover:bg-blue-500 disabled:opacity-50">{loading ? 'Updating...' : 'Update password'}</button>
-        </form>
-        <Link to="/login" className="block mt-5 text-center text-sm text-blue-400 hover:text-blue-300">Back to sign in</Link>
-      </div>
-    </div>
+          <p className="t-support mt-1.5 text-ink-mute">{t('reset.help')}</p>
+        </div>
+
+        <button type="submit" disabled={loading} className="btn btn-primary w-full btn-lg">
+          {loading ? t('common.pleaseWait') : t('reset.submit')}
+        </button>
+      </form>
+
+      <Link to="/login" className="mt-4 block text-center text-[14px] font-medium text-brand-fg hover:underline dark:text-info">
+        {t('auth.backToSignIn')}
+      </Link>
+    </AuthShell>
   );
 }

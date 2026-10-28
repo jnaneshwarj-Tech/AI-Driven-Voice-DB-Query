@@ -9,6 +9,8 @@ import routes_auth, routes_query, routes_export, routes_files, routes_undo
 import routes_backup, routes_monitor, routes_lifecycle, routes_update
 from database import create_indexes, init_pool
 from scheduler import start_scheduler, stop_scheduler
+from security_middleware import SecurityMiddleware
+from config import settings
 
 
 def _expose_docs() -> bool:
@@ -17,7 +19,8 @@ def _expose_docs() -> bool:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
+    # Startup validation
+    settings.validate_startup()
     init_pool()
     create_indexes()
     start_scheduler()
@@ -29,21 +32,34 @@ app = FastAPI(
     title="AI Student Data Management System",
     description="NLP → SQL · MySQL · Role-based · File Upload · Charts · PDF · Backup & Recovery",
     version="4.0.0",
+    debug=False,
     lifespan=lifespan,
-    # The generated schema lists every door and payload in the system. That is a
-    # developer tool, not something college staff use, so it stays closed in a
-    # deployment; start with API_DOCS=1 to open /docs and /openapi.json again.
     docs_url="/docs" if _expose_docs() else None,
     redoc_url="/redoc" if _expose_docs() else None,
     openapi_url="/openapi.json" if _expose_docs() else None,
 )
 
+# ── Security Middleware (Security Headers + Rate Limiting) ────────────────────
+app.add_middleware(SecurityMiddleware)
+
+# ── CORS Hardening (Restricted Origin Whitelist) ──────────────────────────────
+_cors_origins = set()
+for origin in (settings.ALLOWED_ORIGINS or "").split(","):
+    origin_clean = origin.strip().rstrip("/")
+    if origin_clean:
+        _cors_origins.add(origin_clean)
+if settings.FRONTEND_URL:
+    _cors_origins.add(settings.FRONTEND_URL.strip().rstrip("/"))
+if not _cors_origins:
+    _cors_origins = {"http://localhost:5173", "http://127.0.0.1:5173"}
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=list(_cors_origins),
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With"],
+    max_age=600,
 )
 
 app.include_router(routes_auth.router)
@@ -67,10 +83,7 @@ def root():
 if __name__ == "__main__":
     import os
     import uvicorn
-    # Dev convenience is preserved (auto-reload on), but the bind host, port and
-    # reload are now env-driven so production can start cleanly without editing
-    # code: set DEV_RELOAD=0 (and a proper host/port) behind a real ASGI server.
-    dev_reload = os.getenv("DEV_RELOAD", "1").strip().lower() in ("1", "true", "yes", "on")
+    dev_reload = os.getenv("DEV_RELOAD", "0").strip().lower() in ("1", "true", "yes", "on")
     uvicorn.run(
         "main:app",
         host=os.getenv("APP_HOST", "0.0.0.0"),

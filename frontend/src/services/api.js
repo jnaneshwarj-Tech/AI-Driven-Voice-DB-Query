@@ -1,7 +1,24 @@
 import axios from 'axios';
 
+export const resolveApiBaseUrl = () => {
+  if (typeof window !== 'undefined') {
+    if (window.desktopAPI?.getServerUrl) {
+      const desktopUrl = window.desktopAPI.getServerUrl();
+      if (desktopUrl) return desktopUrl;
+    }
+    if (window.__CONFIG__?.API_URL) {
+      return window.__CONFIG__.API_URL;
+    }
+  }
+  if (import.meta.env?.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL;
+  }
+  return '/api';
+};
+
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: resolveApiBaseUrl(),
+  timeout: 30000,
 });
 
 // Request interceptor to add JWT to headers

@@ -2,25 +2,28 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import api from '../services/api';
 import { getUserMessage } from '../services/errors';
 import { useToast } from './Toast';
+import { useI18n } from '../context/LanguageContext';
 import {
   Users, PlusCircle, RefreshCw, Search, History, CheckCircle, XCircle,
   AlertTriangle, ShieldCheck, Clock, FileText, ArrowRight, UserCheck,
   Sparkles, Download, Wand2,
 } from 'lucide-react';
 
-// ── Status → colour hints (mirrors the backend canonical list from /options) ──
+// ── Status → badge variants (mirrors the backend canonical list from /options) ─
+// Values are design-system badge classes; the status strings themselves are
+// backend data and are always rendered as-is.
 const STATUS_COLORS = {
-  'Active':                    'bg-emerald-50 text-emerald-700 border-emerald-200',
-  'Temporarily Discontinued':  'bg-amber-50 text-amber-700 border-amber-200',
-  'Discontinued-Review Req':   'bg-rose-50 text-rose-700 border-rose-200',
-  'Dropout-College Recorded':  'bg-rose-50 text-rose-700 border-rose-200',
-  'Readmission Requested':     'bg-sky-50 text-sky-700 border-sky-200',
-  'Readmission Approved':      'bg-blue-50 text-blue-700 border-blue-200',
-  'Rejoined-Active':           'bg-teal-50 text-teal-700 border-teal-200',
-  'Graduated':                 'bg-violet-50 text-violet-700 border-violet-200',
-  'Transferred':               'bg-slate-100 text-slate-700 border-slate-200',
-  'Admission Cancelled':       'bg-zinc-100 text-zinc-700 border-zinc-200',
-  'Other':                     'bg-slate-50 text-slate-700 border-slate-200',
+  'Active':                    'badge-ok',
+  'Temporarily Discontinued':  'badge-warn',
+  'Discontinued-Review Req':   'badge-err',
+  'Dropout-College Recorded':  'badge-err',
+  'Readmission Requested':     'badge-info',
+  'Readmission Approved':      'badge-info',
+  'Rejoined-Active':           'badge-ok',
+  'Graduated':                 'badge-accent',
+  'Transferred':               'badge-quiet',
+  'Admission Cancelled':       'badge-quiet',
+  'Other':                     'badge-quiet',
 };
 
 const fmtDate = (v) => {
@@ -31,9 +34,9 @@ const fmtDate = (v) => {
 };
 
 function StatusPill({ status }) {
-  const cls = STATUS_COLORS[status] || 'bg-slate-50 text-slate-700 border-slate-200';
+  const cls = STATUS_COLORS[status] || 'badge-quiet';
   return (
-    <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border ${cls}`}>
+    <span className={`badge ${cls}`}>
       {status || 'Active'}
     </span>
   );
@@ -41,40 +44,49 @@ function StatusPill({ status }) {
 
 // ── Small modal shell ─────────────────────────────────────────────────────────
 function Modal({ title, subtitle, onClose, children, tone = 'blue' }) {
-  const toneCls = { blue: 'border-blue-500', amber: 'border-amber-500', rose: 'border-rose-500', emerald: 'border-emerald-500' }[tone] || 'border-blue-500';
+  const { t } = useI18n();
+  const toneCls = { blue: 'border-brand', amber: 'border-warn', rose: 'border-err', emerald: 'border-ok' }[tone] || 'border-brand';
   return (
-    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className={`bg-white dark:bg-slate-900 rounded-2xl border-t-4 ${toneCls} shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto`}
+    <div className="backdrop" onClick={onClose}>
+      <div role="dialog" aria-modal="true" aria-label={typeof title === 'string' ? title : undefined}
+           className={`modal-panel border-t-4 ${toneCls} anim-scale-in`}
            onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-start justify-between p-5 border-b border-slate-100 dark:border-slate-800">
-          <div>
-            <h3 className="text-base font-bold text-slate-800 dark:text-slate-100">{title}</h3>
-            {subtitle && <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{subtitle}</p>}
+        <div className="flex items-start justify-between gap-3 p-4 sm:p-5 border-b border-line">
+          <div className="min-w-0">
+            <h3 className="t-card text-ink">{title}</h3>
+            {subtitle && <p className="t-support text-ink-mute mt-0.5">{subtitle}</p>}
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 text-xl leading-none">×</button>
+          <button onClick={onClose} aria-label={t('common.close')}
+                  className="btn btn-ghost btn-sm px-2 min-h-0 text-ink-mute hover:text-ink leading-none shrink-0">
+            <span aria-hidden="true" className="text-lg leading-none">×</span>
+          </button>
         </div>
-        <div className="p-5">{children}</div>
+        <div className="p-4 sm:p-5">{children}</div>
       </div>
     </div>
   );
 }
 
 const Empty = ({ icon: Icon, title, hint }) => (
-  <div className="flex flex-col items-center justify-center py-16 text-slate-400 gap-2">
-    {Icon && <div className="w-12 h-12 rounded-full bg-slate-50 dark:bg-slate-800 flex items-center justify-center"><Icon className="w-6 h-6" /></div>}
-    <p className="text-sm font-bold">{title}</p>
-    {hint && <p className="text-xs text-slate-500 max-w-md text-center">{hint}</p>}
+  <div className="empty-state">
+    {Icon && <div className="w-12 h-12 rounded-full bg-sunken border border-line flex items-center justify-center text-ink-mute"><Icon className="w-6 h-6" /></div>}
+    <p className="t-card text-ink-soft">{title}</p>
+    {hint && <p className="t-support text-ink-mute max-w-md">{hint}</p>}
   </div>
 );
 
-const Spinner = () => (
-  <div className="flex items-center justify-center py-16 gap-3 text-slate-400">
-    <div className="w-8 h-8 border-4 border-slate-200 border-t-blue-500 rounded-full animate-spin" />
-    <p className="text-xs">Loading lifecycle records…</p>
-  </div>
-);
+const Spinner = () => {
+  const { t } = useI18n();
+  return (
+    <div className="flex items-center justify-center py-16 gap-3 text-ink-mute">
+      <div className="w-8 h-8 border-4 border-line border-t-brand rounded-full animate-spin" />
+      <p className="t-support">{t('lifecycle.loadingRecords')}</p>
+    </div>
+  );
+};
 
 export default function LifecycleDashboard({ role = 'Staff' }) {
+  const { t } = useI18n();
   const isAdmin = String(role).toLowerCase() === 'admin';
   const showToast = useToast().showToast;
 
@@ -120,7 +132,7 @@ export default function LifecycleDashboard({ role = 'Staff' }) {
       setRows(r.data?.data || []);
       setTotal(r.data?.total_count ?? (r.data?.data || []).length);
     } catch (e) {
-      const m = getUserMessage(e, 'Could not load lifecycle list.');
+      const m = getUserMessage(e, t('lifecycle.errLoadList'));
       setErr(m);
       showToast({ type: 'error', message: m });
     } finally { setLoading(false); }
@@ -134,7 +146,7 @@ export default function LifecycleDashboard({ role = 'Staff' }) {
       const r = await api.get(`/lifecycle/students/${encodeURIComponent(usn)}`);
       setDetail(r.data);
     } catch (e) {
-      showToast({ type: 'error', message: getUserMessage(e, 'Could not load student lifecycle history.') });
+      showToast({ type: 'error', message: getUserMessage(e, t('lifecycle.errLoadHistory')) });
       setDetailUsn(null);
     } finally { setDetailLoading(false); }
   };
@@ -160,7 +172,7 @@ export default function LifecycleDashboard({ role = 'Staff' }) {
       });
       setNlPreview(r.data);
     } catch (e) {
-      showToast({ type: 'error', message: getUserMessage(e, 'Could not read the lifecycle command.') });
+      showToast({ type: 'error', message: getUserMessage(e, t('lifecycle.errNlRead')) });
     } finally { setNlLoading(false); }
   };
 
@@ -180,13 +192,13 @@ export default function LifecycleDashboard({ role = 'Staff' }) {
       showToast({
         type: 'success',
         message: d.deduplicated
-          ? 'Already recorded — no duplicate created.'
-          : `Recorded: ${d.from_status} → ${d.to_status}. Undo token saved.`,
+          ? t('lifecycle.dedup')
+          : t('lifecycle.recorded', { from: d.from_status, to: d.to_status }),
       });
       setNlPreview(null); setNlQuery('');
       await loadList();
     } catch (e) {
-      showToast({ type: 'error', message: getUserMessage(e, 'Could not record the lifecycle status.') });
+      showToast({ type: 'error', message: getUserMessage(e, t('lifecycle.errNlRecord')) });
     } finally { setNlLoading(false); }
   };
 
@@ -201,9 +213,9 @@ export default function LifecycleDashboard({ role = 'Staff' }) {
       a.href = url; a.download = `lifecycle_register.${fmt}`;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 2000);
-      showToast({ type: 'success', message: `Exported lifecycle register as ${fmt.toUpperCase()}.` });
+      showToast({ type: 'success', message: t('lifecycle.exported', { fmt: fmt.toUpperCase() }) });
     } catch (e) {
-      let msg = 'Export failed.';
+      let msg = t('lifecycle.exportFailed');
       try { msg = JSON.parse(await e.response?.data?.text?.())?.detail || msg; } catch { /* blob error */ }
       showToast({ type: 'error', message: msg });
     } finally { setExporting(''); }
@@ -215,193 +227,200 @@ export default function LifecycleDashboard({ role = 'Staff' }) {
   });
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 anim-fade-up">
       {/* Header */}
       <div className="flex items-start justify-between flex-wrap gap-2">
         <div>
-          <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
-            <Users className="w-5 h-5 text-blue-600" /> Student Lifecycle Management
+          <h2 className="t-section text-ink flex items-center gap-2">
+            <Users className="w-5 h-5 text-brand-fg" aria-hidden="true" /> {t('lifecycle.title')}
           </h2>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-            Audited status history for discontinuation, dropout, readmission and rejoining.
-            Eligibility is advisory only — the software never auto-approves. Academic staff must record the decision.
+          <p className="t-support text-ink-mute mt-1 max-w-3xl">
+            {t('lifecycle.subtitle')}
           </p>
         </div>
         <button onClick={loadList} disabled={loading}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold rounded-lg hover:bg-slate-50 disabled:opacity-60">
-          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
+                className="btn btn-ghost btn-sm">
+          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} aria-hidden="true" /> {t('common.refresh')}
         </button>
       </div>
 
       {err && (
-        <div className="flex items-center gap-2 p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-lg text-xs">
-          <AlertTriangle className="w-4 h-4" /> {err}
+        <div role="alert" className="flex items-center gap-2 p-3 bg-err-soft border border-err/30 text-err rounded-lg t-support">
+          <AlertTriangle className="w-4 h-4 shrink-0" aria-hidden="true" /> {err}
         </div>
       )}
 
       {/* §1 Record by natural language */}
-      <div className="bg-white/80 dark:bg-slate-900/60 backdrop-blur border border-blue-200/70 dark:border-blue-800/50 rounded-2xl p-4">
+      <section className="card p-4 sm:p-5" aria-labelledby="nl-heading">
         <div className="flex items-center gap-2 mb-2">
-          <Wand2 className="w-4 h-4 text-blue-600" />
-          <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100">Record by natural language</h3>
+          <Wand2 className="w-4 h-4 text-brand-fg" aria-hidden="true" />
+          <h3 id="nl-heading" className="t-card text-ink">{t('lifecycle.nlHeading')}</h3>
         </div>
-        <p className="text-[11px] text-slate-500 mb-2">
-          Type a plain instruction (English, broken English, Kannada or mixed). The system reads the action,
-          finds the student in MySQL and shows a confirmation — it saves <strong>only after you confirm</strong>,
-          and never invents a record for an unknown USN.
+        <p className="t-support text-ink-mute mb-3">
+          {t('lifecycle.nlHelpBefore')} <strong className="text-ink-soft">{t('lifecycle.nlHelpStrong')}</strong>{t('lifecycle.nlHelpAfter')}
         </p>
         <div className="flex flex-wrap gap-2 items-stretch">
           <textarea value={nlQuery} onChange={e => setNlQuery(e.target.value)} rows={2}
-                    placeholder="e.g. USN 4HG23CS032 discontinued due to financial problems on 12-05-2025"
-                    className="flex-1 min-w-[220px] px-2 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs" />
+                    aria-label={t('lifecycle.nlHeading')}
+                    placeholder={t('lifecycle.nlPlaceholder')}
+                    className="input flex-1 min-w-[220px]" />
           <select value={nlLang} onChange={e => setNlLang(e.target.value)}
-                  className="px-2 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs">
-            <option value="english">English</option>
-            <option value="kannada">ಕನ್ನಡ (Kannada)</option>
-            <option value="mixed">Mixed</option>
+                  aria-label={t('lifecycle.nlLangAria')}
+                  className="input w-auto shrink-0">
+            <option value="english">{t('lifecycle.langEnglish')}</option>
+            <option value="kannada">{t('lifecycle.langKannada')}</option>
+            <option value="mixed">{t('lifecycle.langMixed')}</option>
           </select>
           <button onClick={() => runNlPreview()} disabled={nlLoading || !nlQuery.trim()}
-                  className="px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 disabled:opacity-60 inline-flex items-center gap-1">
-            <Sparkles className="w-3.5 h-3.5" /> {nlLoading ? 'Reading…' : 'Detect & preview'}
+                  className="btn btn-primary">
+            <Sparkles className="w-3.5 h-3.5" aria-hidden="true" /> {nlLoading ? t('lifecycle.reading') : t('lifecycle.detect')}
           </button>
         </div>
-      </div>
+      </section>
 
       {/* Filters */}
-      <div className="bg-white/80 dark:bg-slate-900/60 backdrop-blur border border-slate-200/70 dark:border-slate-800/60 rounded-2xl p-4 grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+      <section className="card p-4 sm:p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3" aria-label={t('lifecycle.filtersAria')}>
         <label className="flex flex-col gap-1">
-          <span className="text-slate-500 font-semibold uppercase tracking-wide text-[10px]">Status</span>
+          <span className="field-label">{t('common.status')}</span>
           <select value={filters.status} onChange={e => setFilters({ ...filters, status: e.target.value })}
-                  className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-100">
-            <option value="">Any</option>
+                  className="input">
+            <option value="">{t('lifecycle.any')}</option>
             {options.statuses.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-slate-500 font-semibold uppercase tracking-wide text-[10px]">Reason Category</span>
+          <span className="field-label">{t('lifecycle.reasonCategory')}</span>
           <select value={filters.reason_category} onChange={e => setFilters({ ...filters, reason_category: e.target.value })}
-                  className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-100">
-            <option value="">Any</option>
+                  className="input">
+            <option value="">{t('lifecycle.any')}</option>
             {(options.reason_categories || []).map(rc => <option key={rc} value={rc}>{rc}</option>)}
           </select>
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-slate-500 font-semibold uppercase tracking-wide text-[10px]">Scheme</span>
+          <span className="field-label">{t('lifecycle.scheme')}</span>
           <input value={filters.scheme} onChange={e => setFilters({ ...filters, scheme: e.target.value })}
-                 placeholder="e.g. 2022 / 2025"
-                 className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-100" />
+                 placeholder={t('lifecycle.schemePlaceholder')}
+                 className="input" />
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-slate-500 font-semibold uppercase tracking-wide text-[10px]">Admission Year</span>
+          <span className="field-label">{t('lifecycle.admissionYear')}</span>
           <input value={filters.admission_year} onChange={e => setFilters({ ...filters, admission_year: e.target.value })}
-                 inputMode="numeric" placeholder="e.g. 2024"
-                 className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-100" />
+                 inputMode="numeric" placeholder={t('lifecycle.admissionYearPlaceholder')}
+                 className="input" />
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-slate-500 font-semibold uppercase tracking-wide text-[10px]">Branch</span>
+          <span className="field-label">{t('lifecycle.branch')}</span>
           <input value={filters.branch} onChange={e => setFilters({ ...filters, branch: e.target.value })}
-                 placeholder="e.g. CS"
-                 className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-100" />
+                 placeholder={t('lifecycle.branchPlaceholder')}
+                 className="input" />
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-slate-500 font-semibold uppercase tracking-wide text-[10px]">Last Semester</span>
+          <span className="field-label">{t('lifecycle.lastSemester')}</span>
           <input value={filters.last_semester} onChange={e => setFilters({ ...filters, last_semester: e.target.value })}
-                 inputMode="numeric" placeholder="1-8"
-                 className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-100" />
+                 inputMode="numeric" placeholder={t('lifecycle.lastSemesterPlaceholder')}
+                 className="input" />
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-slate-500 font-semibold uppercase tracking-wide text-[10px]">Effective From</span>
+          <span className="field-label">{t('lifecycle.effectiveFrom')}</span>
           <input type="date" value={filters.date_from} onChange={e => setFilters({ ...filters, date_from: e.target.value })}
-                 className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-100" />
+                 className="input" />
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-slate-500 font-semibold uppercase tracking-wide text-[10px]">Effective To</span>
+          <span className="field-label">{t('lifecycle.effectiveTo')}</span>
           <input type="date" value={filters.date_to} onChange={e => setFilters({ ...filters, date_to: e.target.value })}
-                 className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-100" />
+                 className="input" />
         </label>
-        <label className="flex flex-col gap-1 col-span-2 md:col-span-4">
-          <span className="text-slate-500 font-semibold uppercase tracking-wide text-[10px]">Search (USN / name / reason)</span>
+        <label className="flex flex-col gap-1 sm:col-span-2 lg:col-span-4">
+          <span className="field-label">{t('lifecycle.searchLabel')}</span>
           <input value={filters.search} onChange={e => setFilters({ ...filters, search: e.target.value })}
-                 placeholder="type to filter the register"
-                 className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-100" />
+                 placeholder={t('lifecycle.searchPlaceholder')}
+                 className="input" />
         </label>
-        <div className="col-span-2 md:col-span-4 flex items-center justify-between flex-wrap gap-2">
-          <p className="text-[11px] text-slate-500">
-            Showing <strong>{rows.length}</strong> of <strong>{total}</strong> student(s). Reports refresh from live MySQL after every change.
+        <div className="sm:col-span-2 lg:col-span-4 flex items-center justify-between flex-wrap gap-2">
+          <p className="t-support text-ink-mute" aria-live="polite">
+            {t('lifecycle.showing', { shown: rows.length, total })} {t('lifecycle.liveRefresh')}
           </p>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <button onClick={clearFilters}
-                    className="text-[11px] text-blue-600 hover:underline">Clear filters</button>
+                    className="btn btn-ghost btn-sm">{t('lifecycle.clearFilters')}</button>
             {['csv', 'xlsx', 'pdf'].map(f => (
               <button key={f} onClick={() => doExport(f)} disabled={!!exporting || rows.length === 0}
-                      className="flex items-center gap-1 px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-[11px] font-semibold hover:bg-slate-50 disabled:opacity-50">
-                <Download className="w-3 h-3" /> {exporting === f ? '…' : f.toUpperCase()}
+                      className="btn btn-ghost btn-sm">
+                <Download className="w-3 h-3" aria-hidden="true" /> {exporting === f ? '…' : f.toUpperCase()}
               </button>
             ))}
           </div>
         </div>
-      </div>
+      </section>
 
       {/* Table */}
-      <div className="bg-white/80 dark:bg-slate-900/60 backdrop-blur border border-slate-200/70 dark:border-slate-800/60 rounded-2xl overflow-hidden">
+      <div className="table-wrap">
         {loading ? <Spinner /> : rows.length === 0 ? (
-          <Empty icon={Search} title="No matching lifecycle records"
-                 hint="Try relaxing a filter, or record a status change from the Actions column of a student row." />
+          <Empty icon={Search} title={t('lifecycle.noRecords')}
+                 hint={t('lifecycle.noRecordsHint')} />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead className="bg-slate-50 dark:bg-slate-950/40 text-slate-500 uppercase text-[10px]">
+          <div className="table-scroll">
+            <table className="w-full">
+              <thead>
                 <tr>
-                  <th onClick={() => setSort({ by: 'usn', dir: sort.by === 'usn' && sort.dir === 'asc' ? 'desc' : 'asc' })}
-                      className="text-left px-4 py-2 cursor-pointer select-none">USN{sort.by === 'usn' ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}</th>
-                  <th onClick={() => setSort({ by: 'name', dir: sort.by === 'name' && sort.dir === 'asc' ? 'desc' : 'asc' })}
-                      className="text-left px-4 py-2 cursor-pointer select-none">Name{sort.by === 'name' ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}</th>
-                  <th className="text-left px-4 py-2">Branch / Batch</th>
-                  <th className="text-left px-4 py-2">Status</th>
-                  <th className="text-left px-4 py-2">Last Sem</th>
-                  <th className="text-left px-4 py-2">Reason</th>
-                  <th className="text-left px-4 py-2">Category</th>
-                  <th onClick={() => setSort({ by: 'effective_date', dir: sort.by === 'effective_date' && sort.dir === 'asc' ? 'desc' : 'asc' })}
-                      className="text-left px-4 py-2 cursor-pointer select-none">Effective{sort.by === 'effective_date' ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}</th>
-                  <th className="text-left px-4 py-2">Latest Event</th>
-                  <th className="text-right px-4 py-2">Actions</th>
+                  <th scope="col"
+                      aria-sort={sort.by === 'usn' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                      onClick={() => setSort({ by: 'usn', dir: sort.by === 'usn' && sort.dir === 'asc' ? 'desc' : 'asc' })}
+                      className="th cursor-pointer select-none">USN{sort.by === 'usn' ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}</th>
+                  <th scope="col"
+                      aria-sort={sort.by === 'name' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                      onClick={() => setSort({ by: 'name', dir: sort.by === 'name' && sort.dir === 'asc' ? 'desc' : 'asc' })}
+                      className="th cursor-pointer select-none">{t('lifecycle.colName')}{sort.by === 'name' ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}</th>
+                  <th scope="col" className="th">{t('lifecycle.colBranchBatch')}</th>
+                  <th scope="col" className="th">{t('common.status')}</th>
+                  <th scope="col" className="th">{t('lifecycle.colLastSem')}</th>
+                  <th scope="col" className="th">{t('lifecycle.colReason')}</th>
+                  <th scope="col" className="th">{t('lifecycle.colCategory')}</th>
+                  <th scope="col"
+                      aria-sort={sort.by === 'effective_date' ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                      onClick={() => setSort({ by: 'effective_date', dir: sort.by === 'effective_date' && sort.dir === 'asc' ? 'desc' : 'asc' })}
+                      className="th cursor-pointer select-none">{t('lifecycle.colEffective')}{sort.by === 'effective_date' ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}</th>
+                  <th scope="col" className="th">{t('lifecycle.colLatestEvent')}</th>
+                  <th scope="col" className="th text-right">{t('common.actions')}</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map(r => (
-                  <tr key={r.usn} className="border-t border-slate-100 dark:border-slate-800/60 hover:bg-slate-50/60 dark:hover:bg-slate-800/30">
-                    <td className="px-4 py-2 font-mono text-slate-600 dark:text-slate-300">{r.usn}</td>
-                    <td className="px-4 py-2 font-semibold text-slate-800 dark:text-slate-100">{r.name}</td>
-                    <td className="px-4 py-2 text-slate-600 dark:text-slate-300">{r.branch || '—'} / {r.admission_year ?? '—'}</td>
-                    <td className="px-4 py-2"><StatusPill status={r.current_status} /></td>
-                    <td className="px-4 py-2 text-slate-600 dark:text-slate-300">{r.last_enrolled_semester ?? '—'}</td>
-                    <td className="px-4 py-2 text-slate-500 max-w-[180px] truncate" title={r.reason || ''}>{r.reason || '—'}</td>
-                    <td className="px-4 py-2"><span className="text-[10px] uppercase font-bold text-slate-500">{r.reason_category || '—'}</span></td>
-                    <td className="px-4 py-2 text-slate-500">{fmtDate(r.effective_date)}</td>
-                    <td className="px-4 py-2 text-slate-500">{r.latest_event_type || '—'}</td>
-                    <td className="px-4 py-2 text-right whitespace-nowrap space-x-2">
+                  <tr key={r.usn} className="tr-hover">
+                    <td className="td font-mono whitespace-nowrap">{r.usn}</td>
+                    <td className="td font-semibold text-ink">{r.name}</td>
+                    <td className="td">{r.branch || '—'} / {r.admission_year ?? '—'}</td>
+                    <td className="td"><StatusPill status={r.current_status} /></td>
+                    <td className="td">{r.last_enrolled_semester ?? '—'}</td>
+                    <td className="td t-truncate" title={r.reason || ''}>{r.reason || '—'}</td>
+                    <td className="td"><span className="t-support text-ink-mute uppercase">{r.reason_category || '—'}</span></td>
+                    <td className="td whitespace-nowrap">{fmtDate(r.effective_date)}</td>
+                    <td className="td">{r.latest_event_type || '—'}</td>
+                    <td className="td text-right whitespace-nowrap">
+                      <div className="inline-flex items-center gap-2 flex-wrap justify-end">
                       <button onClick={() => openDetail(r.usn)}
-                              className="text-[10px] px-2 py-1 rounded border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1 inline-flex">
-                        <History className="w-3 h-3" /> History
+                              className="btn btn-ghost btn-sm">
+                        <History className="w-3 h-3" aria-hidden="true" /> {t('lifecycle.history')}
                       </button>
                       {isAdmin && (
                         <button onClick={() => setStatusTarget(r)}
-                                className="text-[10px] px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 inline-flex items-center gap-1">
-                          <ArrowRight className="w-3 h-3" /> Change status
+                                className="btn btn-primary btn-sm">
+                          <ArrowRight className="w-3 h-3" aria-hidden="true" /> {t('lifecycle.changeStatus')}
                         </button>
                       )}
                       {isAdmin && ['Temporarily Discontinued','Discontinued-Review Req','Dropout-College Recorded'].includes(r.current_status) && (
                         <button onClick={() => setReadmitTarget(r)}
-                                className="text-[10px] px-2 py-1 rounded bg-sky-500 text-white hover:bg-sky-600 inline-flex items-center gap-1">
-                          <UserCheck className="w-3 h-3" /> Readmission request
+                                className="btn btn-primary btn-sm">
+                          <UserCheck className="w-3 h-3" aria-hidden="true" /> {t('lifecycle.readmissionRequest')}
                         </button>
                       )}
                       {isAdmin && r.current_status === 'Readmission Requested' && (
                         <button onClick={() => setDecisionTarget(r)}
-                                className="text-[10px] px-2 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700 inline-flex items-center gap-1">
-                          <ShieldCheck className="w-3 h-3" /> Approve / reject
+                                className="btn btn-primary btn-sm">
+                          <ShieldCheck className="w-3 h-3" aria-hidden="true" /> {t('lifecycle.approveReject')}
                         </button>
                       )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -413,80 +432,83 @@ export default function LifecycleDashboard({ role = 'Staff' }) {
 
       {/* Non-admin hint */}
       {!isAdmin && (
-        <p className="text-[11px] text-slate-500 px-2">
-          Staff role: view + history only. Status changes, readmission requests and decisions require Admin.
+        <p className="t-support text-ink-mute px-2">
+          {t('lifecycle.staffHint')}
         </p>
       )}
 
       {/* Detail modal */}
       {detailUsn && (
-        <Modal title={`Lifecycle · ${detailUsn}`}
-               subtitle={detail ? `${detail.name || ''}` : 'Loading…'}
+        <Modal title={t('lifecycle.detailTitle', { usn: detailUsn })}
+               subtitle={detail ? `${detail.name || ''}` : t('common.loading')}
                onClose={() => setDetailUsn(null)}>
-          {detailLoading ? <Spinner /> : !detail ? <Empty title="No data" /> : (
+          {detailLoading ? <Spinner /> : !detail ? <Empty title={t('lifecycle.noData')} /> : (
             <div className="space-y-4">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
-                <Field label="Current Status"><StatusPill status={detail.current_status} /></Field>
-                <Field label="Scheme">{detail.status?.scheme || '—'}</Field>
-                <Field label="Last Enrolled Sem">{detail.status?.last_enrolled_semester ?? '—'}</Field>
-                <Field label="Academic Year">{detail.status?.last_enrolled_academic_year || '—'}</Field>
-                <Field label="Effective Date">{fmtDate(detail.status?.effective_date)}</Field>
-                <Field label="Reason">{detail.status?.reason || '—'}</Field>
-                <Field label="Document Ref">{detail.status?.document_ref || '—'}</Field>
-                <Field label="Updated By">{detail.status?.updated_by || '—'}</Field>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+                <Field label={t('lifecycle.currentStatus')}><StatusPill status={detail.current_status} /></Field>
+                <Field label={t('lifecycle.scheme')}>{detail.status?.scheme || '—'}</Field>
+                <Field label={t('lifecycle.lastEnrolledSem')}>{detail.status?.last_enrolled_semester ?? '—'}</Field>
+                <Field label={t('lifecycle.academicYear')}>{detail.status?.last_enrolled_academic_year || '—'}</Field>
+                <Field label={t('lifecycle.effectiveDate')}>{fmtDate(detail.status?.effective_date)}</Field>
+                <Field label={t('lifecycle.colReason')}>{detail.status?.reason || '—'}</Field>
+                <Field label={t('lifecycle.documentRef')}>{detail.status?.document_ref || '—'}</Field>
+                <Field label={t('lifecycle.updatedBy')}>{detail.status?.updated_by || '—'}</Field>
               </div>
 
-              <Section title="Status history (append-only, audited)" icon={History}>
+              <Section title={t('lifecycle.statusHistory')} icon={History}>
                 {detail.history?.length ? (
-                  <ol className="space-y-2 text-[11px]">
+                  <ol className="space-y-2 text-sm">
                     {detail.history.map(ev => (
-                      <li key={ev.id} className="border border-slate-100 dark:border-slate-800 rounded-lg p-2 flex flex-wrap gap-x-3 gap-y-1">
-                        <span className="text-slate-400 font-mono">{fmtDate(ev.created_at)}</span>
-                        <span className="font-bold text-slate-600 dark:text-slate-300">{ev.event_type}</span>
-                        <span className="text-slate-500">{ev.from_status || '—'}</span>
-                        <ArrowRight className="w-3 h-3 text-slate-400 inline" />
+                      <li key={ev.id} className="sunken p-2.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-full bg-brand" />
+                        <span className="text-ink-faint font-mono t-support">{fmtDate(ev.created_at)}</span>
+                        <span className="font-semibold text-ink-soft">{ev.event_type}</span>
+                        <span className="text-ink-mute">{ev.from_status || '—'}</span>
+                        <ArrowRight className="w-3 h-3 text-ink-faint inline" aria-hidden="true" />
                         <StatusPill status={ev.to_status} />
-                        {ev.reason && <span className="text-slate-500">· {ev.reason}</span>}
-                        {ev.approval_ref && <span className="text-slate-500">· Ref {ev.approval_ref}</span>}
-                        <span className="ml-auto text-slate-400">by {ev.actor_username || '—'}</span>
+                        {ev.reason && <span className="text-ink-mute">· {ev.reason}</span>}
+                        {ev.approval_ref && <span className="text-ink-mute">· {t('lifecycle.refLabel', { ref: ev.approval_ref })}</span>}
+                        <span className="ml-auto text-ink-faint">{t('lifecycle.byWho', { who: ev.actor_username || '—' })}</span>
                       </li>
                     ))}
                   </ol>
-                ) : <p className="text-[11px] text-slate-400">No status events recorded yet.</p>}
+                ) : <p className="t-support text-ink-faint">{t('lifecycle.historyEmpty')}</p>}
               </Section>
 
-              <Section title="Readmission requests" icon={UserCheck}>
+              <Section title={t('lifecycle.readmissionRequests')} icon={UserCheck}>
                 {detail.readmission_requests?.length ? (
-                  <table className="w-full text-[11px]">
-                    <thead className="text-slate-500 uppercase text-[10px]"><tr>
-                      <th className="text-left py-1">Requested Sem</th><th className="text-left py-1">Date</th>
-                      <th className="text-left py-1">Outcome</th><th className="text-left py-1">Status</th>
-                      <th className="text-left py-1">Approved Sem</th><th className="text-left py-1">Ref</th>
+                  <div className="table-scroll">
+                  <table className="w-full">
+                    <thead><tr>
+                      <th scope="col" className="th">{t('lifecycle.requestedSem')}</th><th scope="col" className="th">{t('lifecycle.colDate')}</th>
+                      <th scope="col" className="th">{t('lifecycle.colOutcome')}</th><th scope="col" className="th">{t('common.status')}</th>
+                      <th scope="col" className="th">{t('lifecycle.approvedSem')}</th><th scope="col" className="th">{t('lifecycle.colRef')}</th>
                     </tr></thead>
                     <tbody>
                       {detail.readmission_requests.map(q => (
-                        <tr key={q.id} className="border-t border-slate-100 dark:border-slate-800">
-                          <td className="py-1">{q.requested_semester ?? '—'}</td>
-                          <td className="py-1">{fmtDate(q.request_date)}</td>
-                          <td className="py-1"><code className="text-slate-500">{q.eligibility_outcome || '—'}</code></td>
-                          <td className="py-1 font-semibold">{q.status}</td>
-                          <td className="py-1">{q.approved_semester ?? '—'}</td>
-                          <td className="py-1">{q.approval_ref || '—'}</td>
+                        <tr key={q.id} className="tr-hover">
+                          <td className="td">{q.requested_semester ?? '—'}</td>
+                          <td className="td">{fmtDate(q.request_date)}</td>
+                          <td className="td"><code className="text-ink-mute">{q.eligibility_outcome || '—'}</code></td>
+                          <td className="td font-semibold text-ink">{q.status}</td>
+                          <td className="td">{q.approved_semester ?? '—'}</td>
+                          <td className="td">{q.approval_ref || '—'}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
-                ) : <p className="text-[11px] text-slate-400">No readmission requests recorded.</p>}
+                  </div>
+                ) : <p className="t-support text-ink-faint">{t('lifecycle.readmitEmpty')}</p>}
               </Section>
 
               {detail.identity_links?.length > 0 && (
-                <Section title="Related USNs (controlled identity links)" icon={FileText}>
-                  <ul className="text-[11px] space-y-1">
+                <Section title={t('lifecycle.relatedUsns')} icon={FileText}>
+                  <ul className="text-sm space-y-1">
                     {detail.identity_links.map((lk, i) => (
-                      <li key={i} className="flex gap-2">
-                        <code className="text-indigo-500">{lk.relation_type}</code>
+                      <li key={i} className="flex gap-2 flex-wrap items-center">
+                        <code className="text-brand-fg">{lk.relation_type}</code>
                         <span className="font-mono">{lk.related_usn}</span>
-                        <span className="text-slate-500">· {lk.note || ''}</span>
+                        <span className="text-ink-mute">· {lk.note || ''}</span>
                       </li>
                     ))}
                   </ul>
@@ -531,20 +553,21 @@ export default function LifecycleDashboard({ role = 'Staff' }) {
 
 // ── §1 natural-language preview / confirmation / student selection ────────────
 function NlPreviewModal({ preview, isAdmin, loading, onClose, onPick, onConfirm }) {
+  const { t } = useI18n();
   const action = preview?.action_required;
   const p = preview?.payload || {};
 
   if (action === 'select_student') {
     return (
-      <Modal title="Which student?" subtitle={preview.message || 'Please select the correct USN.'}
+      <Modal title={t('lifecycle.whichStudent')} subtitle={preview.message || t('lifecycle.selectUsnHint')}
              onClose={onClose} tone="amber">
-        <ul className="space-y-2 text-xs">
+        <ul className="space-y-2 text-sm">
           {(preview.suggestions || []).map(s => (
             <li key={s.usn}>
               <button onClick={() => onPick(s)}
-                      className="w-full text-left px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 flex items-center justify-between">
-                <span className="font-semibold text-slate-800 dark:text-slate-100">{s.name || s.usn}</span>
-                <span className="font-mono text-slate-500">{s.usn}{s.branch ? ` · ${s.branch}` : ''}</span>
+                      className="w-full text-left btn btn-ghost justify-between">
+                <span className="font-semibold text-ink">{s.name || s.usn}</span>
+                <span className="font-mono text-ink-mute">{s.usn}{s.branch ? ` · ${s.branch}` : ''}</span>
               </button>
             </li>
           ))}
@@ -556,41 +579,41 @@ function NlPreviewModal({ preview, isAdmin, loading, onClose, onPick, onConfirm 
   if (action !== 'confirm') {
     // clarify / no_record — informational, nothing was saved.
     return (
-      <Modal title="No record created" subtitle={preview.message || 'Nothing to confirm.'}
+      <Modal title={t('lifecycle.noRecordCreated')} subtitle={preview.message || t('lifecycle.nothingToConfirm')}
              onClose={onClose} tone="rose">
-        <p className="text-xs text-slate-600 dark:text-slate-300">
-          Nothing was written to the database. Adjust the instruction and try again.
+        <p className="t-body text-ink-soft">
+          {t('lifecycle.nothingWritten')}
         </p>
       </Modal>
     );
   }
 
   return (
-    <Modal title="Confirm lifecycle record"
-           subtitle="Review before saving. This appends an audited event and never alters academic, fee or backlog data."
+    <Modal title={t('lifecycle.confirmHeading')}
+           subtitle={t('lifecycle.confirmSub')}
            onClose={onClose} tone="emerald">
-      <div className="space-y-3 text-xs">
-        <div className="grid grid-cols-2 gap-2">
-          <Field label="Student">{p.name || '—'} <span className="font-mono text-slate-500">({p.usn})</span></Field>
-          <Field label="New Status"><StatusPill status={p.to_status} /></Field>
-          <Field label="Reason">{p.reason || '—'}</Field>
-          <Field label="Reason Category">{p.reason_category || '—'}</Field>
-          <Field label="Effective Date">{fmtDate(p.effective_date)}</Field>
-          <Field label="Last Semester">{p.last_enrolled_semester ?? '—'}</Field>
+      <div className="space-y-3 text-sm">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <Field label={t('lifecycle.student')}>{p.name || '—'} <span className="font-mono text-ink-mute">({p.usn})</span></Field>
+          <Field label={t('lifecycle.newStatus')}><StatusPill status={p.to_status} /></Field>
+          <Field label={t('lifecycle.colReason')}>{p.reason || '—'}</Field>
+          <Field label={t('lifecycle.reasonCategory')}>{p.reason_category || '—'}</Field>
+          <Field label={t('lifecycle.effectiveDate')}>{fmtDate(p.effective_date)}</Field>
+          <Field label={t('lifecycle.lastSemester')}>{p.last_enrolled_semester ?? '—'}</Field>
         </div>
-        <div className="p-2 bg-slate-50 dark:bg-slate-950/30 rounded border border-slate-100 dark:border-slate-800 text-[11px] text-slate-500">
-          Original instruction: <span className="italic">"{p.original_query}"</span>
+        <div className="sunken p-2 t-support text-ink-mute">
+          {t('lifecycle.originalInstruction')} <span className="italic">"{p.original_query}"</span>
         </div>
         {!isAdmin && (
-          <div className="p-2 bg-amber-50 border border-amber-200 rounded text-amber-800 text-[11px] flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 mt-0.5" /> Only an Admin may commit a lifecycle change. Preview shown; ask an administrator to confirm.
+          <div className="p-2 bg-warn-soft border border-warn/30 rounded text-warn t-support flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" aria-hidden="true" /> {t('lifecycle.adminOnlyCommit')}
           </div>
         )}
         <div className="flex justify-end gap-2 pt-1">
-          <button onClick={onClose} className="px-3 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700">Cancel</button>
+          <button onClick={onClose} className="btn btn-ghost">{t('common.cancel')}</button>
           <button onClick={onConfirm} disabled={loading || !isAdmin}
-                  className="px-3 py-1.5 text-xs rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60 inline-flex items-center gap-1">
-            <CheckCircle className="w-3.5 h-3.5" /> {loading ? 'Saving…' : 'Confirm & save'}
+                  className="btn btn-accent">
+            <CheckCircle className="w-3.5 h-3.5" aria-hidden="true" /> {loading ? t('common.saving') : t('lifecycle.confirmSave')}
           </button>
         </div>
       </div>
@@ -600,17 +623,17 @@ function NlPreviewModal({ preview, isAdmin, loading, onClose, onPick, onConfirm 
 
 function Field({ label, children }) {
   return (
-    <div className="p-2 rounded-lg bg-slate-50 dark:bg-slate-950/30 border border-slate-100 dark:border-slate-800">
-      <p className="text-[9px] uppercase font-bold text-slate-400 tracking-wide">{label}</p>
-      <div className="text-slate-700 dark:text-slate-100 mt-0.5">{children}</div>
+    <div className="sunken p-2">
+      <p className="t-support text-ink-faint uppercase tracking-wide">{label}</p>
+      <div className="text-ink mt-0.5">{children}</div>
     </div>
   );
 }
 function Section({ title, icon: Icon, children }) {
   return (
     <div>
-      <h4 className="text-xs font-bold text-slate-600 dark:text-slate-300 flex items-center gap-1.5 mb-1.5">
-        {Icon && <Icon className="w-3.5 h-3.5 text-blue-500" />}{title}
+      <h4 className="t-label text-ink-soft flex items-center gap-1.5 mb-1.5">
+        {Icon && <Icon className="w-3.5 h-3.5 text-brand-fg" aria-hidden="true" />}{title}
       </h4>
       {children}
     </div>
@@ -619,6 +642,7 @@ function Section({ title, icon: Icon, children }) {
 
 // ── Status change form ───────────────────────────────────────────────────────
 function StatusChangeModal({ student, options, onClose, onDone }) {
+  const { t } = useI18n();
   const showToast = useToast().showToast;
   const [form, setForm] = useState({
     to_status: '', event_type: 'STATUS_CHANGE', effective_date: '',
@@ -631,98 +655,98 @@ function StatusChangeModal({ student, options, onClose, onDone }) {
   const needsReview = ['Discontinued-Review Req','Readmission Requested'].includes(form.to_status);
 
   const submit = async () => {
-    if (!form.to_status) { showToast({ type: 'error', message: 'Pick a lifecycle status.' }); return; }
+    if (!form.to_status) { showToast({ type: 'error', message: t('lifecycle.pickStatus') }); return; }
     setBusy(true);
     try {
       const payload = Object.fromEntries(Object.entries(form).filter(([_, v]) => String(v).trim() !== ''));
       payload.last_enrolled_semester = payload.last_enrolled_semester ? Number(payload.last_enrolled_semester) : undefined;
       const r = await api.post(`/lifecycle/students/${encodeURIComponent(student.usn)}/status`, payload);
       showToast(r.data.deduplicated
-        ? { type: 'info', message: `Already recorded as ${r.data.to_status} — nothing new was stored.` }
-        : { type: 'success', message: `Status updated: ${r.data.from_status} → ${r.data.to_status}. Undo token recorded.` });
+        ? { type: 'info', message: t('lifecycle.dedupAs', { status: r.data.to_status }) }
+        : { type: 'success', message: t('lifecycle.statusUpdated', { from: r.data.from_status, to: r.data.to_status }) });
       onDone();
     } catch (e) {
-      showToast({ type: 'error', message: getUserMessage(e, 'Could not update lifecycle status.') });
+      showToast({ type: 'error', message: getUserMessage(e, t('lifecycle.errStatusUpdate')) });
     } finally { setBusy(false); }
   };
 
   return (
-    <Modal title={`Change status · ${student.name || student.usn}`}
-           subtitle={`Current: ${student.current_status || 'Active'} — history is append-only, academic/fee/backlog data is preserved.`}
+    <Modal title={t('lifecycle.statusChangeTitle', { name: student.name || student.usn })}
+           subtitle={t('lifecycle.statusChangeSub', { status: student.current_status || 'Active' })}
            onClose={onClose} tone="blue">
-      <div className="space-y-3 text-xs">
-        <div className="grid grid-cols-2 gap-3">
+      <div className="space-y-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <label className="flex flex-col gap-1">
-            <span className="text-slate-500 font-semibold uppercase text-[10px]">New Status *</span>
-            <select value={form.to_status} onChange={set('to_status')}
-                    className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
-              <option value="">— select —</option>
+            <span className="field-label">{t('lifecycle.newStatus')} <span className="text-err" aria-hidden="true">*</span></span>
+            <select value={form.to_status} onChange={set('to_status')} aria-required="true"
+                    className="input">
+              <option value="">{t('lifecycle.selectOption')}</option>
               {options.statuses.filter(s => s !== student.current_status).map(s => <option key={s} value={s}>{s}</option>)}
             </select>
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-slate-500 font-semibold uppercase text-[10px]">Event Type</span>
+            <span className="field-label">{t('lifecycle.eventType')}</span>
             <select value={form.event_type} onChange={set('event_type')}
-                    className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
+                    className="input">
               {options.event_types.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-slate-500 font-semibold uppercase text-[10px]">Effective Date</span>
+            <span className="field-label">{t('lifecycle.effectiveDate')}</span>
             <input type="date" value={form.effective_date} onChange={set('effective_date')}
-                   className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800" />
+                   className="input" />
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-slate-500 font-semibold uppercase text-[10px]">Last Enrolled Semester</span>
+            <span className="field-label">{t('lifecycle.lastEnrolledSemester')}</span>
             <input type="number" min="1" max="8" value={form.last_enrolled_semester} onChange={set('last_enrolled_semester')}
-                   className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800" />
+                   className="input" />
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-slate-500 font-semibold uppercase text-[10px]">Academic Year (e.g. 2024-25)</span>
+            <span className="field-label">{t('lifecycle.academicYearField')}</span>
             <input value={form.last_enrolled_academic_year} onChange={set('last_enrolled_academic_year')}
-                   className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800" />
+                   className="input" />
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-slate-500 font-semibold uppercase text-[10px]">Scheme (2022 / 2025)</span>
+            <span className="field-label">{t('lifecycle.schemeField')}</span>
             <input value={form.scheme} onChange={set('scheme')}
-                   className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800" />
+                   className="input" />
           </label>
-          <label className="flex flex-col gap-1 col-span-2">
-            <span className="text-slate-500 font-semibold uppercase text-[10px]">Reason (optional — never fabricate)</span>
+          <label className="flex flex-col gap-1 sm:col-span-2">
+            <span className="field-label">{t('lifecycle.reasonOptional')}</span>
             <input value={form.reason} onChange={set('reason')}
-                   placeholder="Personal / medical / financial — leave blank if unknown"
-                   className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800" />
+                   placeholder={t('lifecycle.reasonPlaceholder')}
+                   className="input" />
           </label>
-          <label className="flex flex-col gap-1 col-span-2">
-            <span className="text-slate-500 font-semibold uppercase text-[10px]">Reason Category (drives the register filter and reports)</span>
+          <label className="flex flex-col gap-1 sm:col-span-2">
+            <span className="field-label">{t('lifecycle.reasonCategoryField')}</span>
             <select value={form.reason_category} onChange={set('reason_category')}
-                    className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
-              <option value="">Auto — worked out from the reason</option>
+                    className="input">
+              <option value="">{t('lifecycle.autoFromReason')}</option>
               {(options.reason_categories || []).map(s => <option key={s} value={s}>{s}</option>)}
             </select>
           </label>
-          <label className="flex flex-col gap-1 col-span-2">
-            <span className="text-slate-500 font-semibold uppercase text-[10px]">Document Reference</span>
+          <label className="flex flex-col gap-1 sm:col-span-2">
+            <span className="field-label">{t('lifecycle.documentReference')}</span>
             <input value={form.document_ref} onChange={set('document_ref')}
-                   placeholder="e.g. DEAN/2026/007 or upload filename"
-                   className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800" />
+                   placeholder={t('lifecycle.documentRefPlaceholder')}
+                   className="input" />
           </label>
-          <label className="flex flex-col gap-1 col-span-2">
-            <span className="text-slate-500 font-semibold uppercase text-[10px]">Remarks</span>
+          <label className="flex flex-col gap-1 sm:col-span-2">
+            <span className="field-label">{t('lifecycle.remarks')}</span>
             <textarea value={form.remarks} onChange={set('remarks')} rows={2}
-                      className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800" />
+                      className="input" />
           </label>
         </div>
         {needsReview && (
-          <div className="p-2 bg-amber-50 border border-amber-200 rounded text-amber-800 text-[11px] flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 mt-0.5" /> This status flags the student for academic-section review — it does NOT change marks, fees, or backlogs.
+          <div className="p-2 bg-warn-soft border border-warn/30 rounded text-warn t-support flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" aria-hidden="true" /> {t('lifecycle.reviewNote')}
           </div>
         )}
         <div className="flex justify-end gap-2 pt-2">
-          <button onClick={onClose} className="px-3 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700">Cancel</button>
+          <button onClick={onClose} className="btn btn-ghost">{t('common.cancel')}</button>
           <button onClick={submit} disabled={busy}
-                  className="px-3 py-1.5 text-xs rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60 inline-flex items-center gap-1">
-            <PlusCircle className="w-3.5 h-3.5" /> {busy ? 'Saving…' : 'Save status change'}
+                  className="btn btn-accent">
+            <PlusCircle className="w-3.5 h-3.5" aria-hidden="true" /> {busy ? t('common.saving') : t('lifecycle.saveStatusChange')}
           </button>
         </div>
       </div>
@@ -732,6 +756,7 @@ function StatusChangeModal({ student, options, onClose, onDone }) {
 
 // ── Readmission request modal (advisory eligibility, never auto-approves) ─────
 function ReadmitRequestModal({ student, onClose, onDone }) {
+  const { t } = useI18n();
   const showToast = useToast().showToast;
   const [form, setForm] = useState({ requested_semester: '', request_date: '', scheme: '', remarks: '' });
   const [busy, setBusy] = useState(false);
@@ -742,48 +767,48 @@ function ReadmitRequestModal({ student, onClose, onDone }) {
       const payload = Object.fromEntries(Object.entries(form).filter(([_, v]) => String(v).trim() !== ''));
       if (payload.requested_semester) payload.requested_semester = Number(payload.requested_semester);
       const r = await api.post(`/lifecycle/students/${encodeURIComponent(student.usn)}/readmission/request`, payload);
-      showToast({ type: 'success', message: `Request recorded. Outcome: ${r.data.eligibility.outcome_text}` });
+      showToast({ type: 'success', message: t('lifecycle.requestRecorded', { outcome: r.data.eligibility.outcome_text }) });
       onDone();
     } catch (e) {
-      showToast({ type: 'error', message: getUserMessage(e, 'Could not create readmission request.') });
+      showToast({ type: 'error', message: getUserMessage(e, t('lifecycle.errReadmit')) });
     } finally { setBusy(false); }
   };
 
   return (
-    <Modal title={`Readmission request · ${student.name || student.usn}`}
-           subtitle="The eligibility check is advisory. The software never self-approves — an Admin records the official decision."
+    <Modal title={t('lifecycle.readmitTitle', { name: student.name || student.usn })}
+           subtitle={t('lifecycle.readmitSub')}
            onClose={onClose} tone="blue">
-      <div className="space-y-3 text-xs">
-        <div className="grid grid-cols-2 gap-3">
+      <div className="space-y-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <label className="flex flex-col gap-1">
-            <span className="text-slate-500 font-semibold uppercase text-[10px]">Requested Semester</span>
+            <span className="field-label">{t('lifecycle.requestedSemester')}</span>
             <input type="number" min="1" max="8" value={form.requested_semester}
                    onChange={e => setForm({ ...form, requested_semester: e.target.value })}
-                   className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800" />
+                   className="input" />
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-slate-500 font-semibold uppercase text-[10px]">Request Date</span>
+            <span className="field-label">{t('lifecycle.requestDate')}</span>
             <input type="date" value={form.request_date}
                    onChange={e => setForm({ ...form, request_date: e.target.value })}
-                   className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800" />
+                   className="input" />
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-slate-500 font-semibold uppercase text-[10px]">Scheme</span>
+            <span className="field-label">{t('lifecycle.scheme')}</span>
             <input value={form.scheme} onChange={e => setForm({ ...form, scheme: e.target.value })}
-                   placeholder="e.g. 2022 / 2025"
-                   className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800" />
+                   placeholder={t('lifecycle.schemePlaceholder')}
+                   className="input" />
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-slate-500 font-semibold uppercase text-[10px]">Remarks</span>
+            <span className="field-label">{t('lifecycle.remarks')}</span>
             <input value={form.remarks} onChange={e => setForm({ ...form, remarks: e.target.value })}
-                   className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800" />
+                   className="input" />
           </label>
         </div>
         <div className="flex justify-end gap-2 pt-2">
-          <button onClick={onClose} className="px-3 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700">Cancel</button>
+          <button onClick={onClose} className="btn btn-ghost">{t('common.cancel')}</button>
           <button onClick={submit} disabled={busy}
-                  className="px-3 py-1.5 text-xs rounded-lg bg-sky-500 text-white hover:bg-sky-600 disabled:opacity-60">
-            {busy ? 'Saving…' : 'Record request'}
+                  className="btn btn-accent">
+            {busy ? t('common.saving') : t('lifecycle.recordRequest')}
           </button>
         </div>
       </div>
@@ -793,6 +818,7 @@ function ReadmitRequestModal({ student, onClose, onDone }) {
 
 // ── Approve / reject modal — fetches eligibility live, then records decision ──
 function DecisionModal({ student, onClose, onDone }) {
+  const { t } = useI18n();
   const showToast = useToast().showToast;
   const [elig, setElig] = useState(null);
   const [form, setForm] = useState({
@@ -817,96 +843,98 @@ function DecisionModal({ student, onClose, onDone }) {
       if (form.rejoin) { payload.rejoin = true; if (form.rejoin_date) payload.rejoin_date = form.rejoin_date; }
       if (form.remarks) payload.remarks = form.remarks;
       const r = await api.post(`/lifecycle/students/${encodeURIComponent(student.usn)}/readmission/decision`, payload);
-      showToast({ type: 'success', message: `${form.decision === 'approve' ? 'Approved' : 'Rejected'}. New status: ${r.data.to_status}. Undo token recorded.` });
+      showToast({ type: 'success', message: form.decision === 'approve'
+        ? t('lifecycle.approvedToast', { status: r.data.to_status })
+        : t('lifecycle.rejectedToast', { status: r.data.to_status }) });
       onDone();
     } catch (e) {
-      showToast({ type: 'error', message: getUserMessage(e, 'Could not record the decision.') });
+      showToast({ type: 'error', message: getUserMessage(e, t('lifecycle.errDecision')) });
     } finally { setBusy(false); }
   };
 
   return (
-    <Modal title={`Readmission decision · ${student.name || student.usn}`}
-           subtitle="Only a designated authority may record this decision. An eligibility warning is advisory and does not permanently block the student."
+    <Modal title={t('lifecycle.decisionTitle', { name: student.name || student.usn })}
+           subtitle={t('lifecycle.decisionSub')}
            onClose={onClose} tone={form.decision === 'reject' ? 'rose' : 'emerald'}>
-      <div className="space-y-3 text-xs">
+      <div className="space-y-3">
         {elig && (
-          <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/30 border border-slate-200 dark:border-slate-800">
-            <p className="text-[10px] uppercase text-slate-400 font-bold mb-1 flex items-center gap-1">
-              <ShieldCheck className="w-3 h-3" /> Advisory eligibility snapshot
+          <div className="p-3 sunken">
+            <p className="t-label text-ink-mute mb-1 flex items-center gap-1">
+              <ShieldCheck className="w-3 h-3" aria-hidden="true" /> {t('lifecycle.advisoryHeading')}
             </p>
-            <p className="text-slate-700 dark:text-slate-200">{elig.outcome_text}</p>
+            <p className="text-ink-soft">{elig.outcome_text}</p>
             {elig.concerns?.length > 0 && (
               <ul className="mt-2 space-y-1">
                 {elig.concerns.map((c, i) => (
-                  <li key={i} className="text-[11px] text-slate-600 dark:text-slate-300 flex gap-1">
-                    <AlertTriangle className="w-3 h-3 mt-0.5 text-amber-500 shrink-0" /> {c}
+                  <li key={i} className="t-support text-ink-soft flex gap-1">
+                    <AlertTriangle className="w-3 h-3 mt-0.5 text-warn shrink-0" aria-hidden="true" /> {c}
                   </li>
                 ))}
               </ul>
             )}
             {elig.rules_applied?.length > 0 && (
-              <p className="mt-2 text-[10px] text-slate-500">Verified rules applied: {elig.rules_applied.map(r => r.rule_key).join(', ')}</p>
+              <p className="mt-2 t-support text-ink-mute">{t('lifecycle.verifiedRules')} {elig.rules_applied.map(r => r.rule_key).join(', ')}</p>
             )}
-            <p className="mt-2 text-[10px] text-slate-500 italic">
-              The application records and supports decision-making; authorised staff and VTU remain responsible for official approvals.
+            <p className="mt-2 t-support text-ink-mute italic">
+              {t('lifecycle.decisionNote')}
             </p>
           </div>
         )}
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <label className="flex flex-col gap-1">
-            <span className="text-slate-500 font-semibold uppercase text-[10px]">Decision</span>
+            <span className="field-label">{t('lifecycle.decision')}</span>
             <select value={form.decision} onChange={e => setForm({ ...form, decision: e.target.value })}
-                    className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
-              <option value="approve">Approve</option>
-              <option value="reject">Reject (route to review)</option>
+                    className="input">
+              <option value="approve">{t('lifecycle.approve')}</option>
+              <option value="reject">{t('lifecycle.rejectOption')}</option>
             </select>
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-slate-500 font-semibold uppercase text-[10px]">Approved Semester</span>
+            <span className="field-label">{t('lifecycle.approvedSemester')}</span>
             <input type="number" min="1" max="8" value={form.approved_semester}
                    onChange={e => setForm({ ...form, approved_semester: e.target.value })}
-                   className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800" />
+                   className="input" />
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-slate-500 font-semibold uppercase text-[10px]">Approval Date</span>
+            <span className="field-label">{t('lifecycle.approvalDate')}</span>
             <input type="date" value={form.approval_date}
                    onChange={e => setForm({ ...form, approval_date: e.target.value })}
-                   className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800" />
+                   className="input" />
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-slate-500 font-semibold uppercase text-[10px]">Approval Reference</span>
+            <span className="field-label">{t('lifecycle.approvalReference')}</span>
             <input value={form.approval_ref} onChange={e => setForm({ ...form, approval_ref: e.target.value })}
-                   placeholder="e.g. REG/2026/007"
-                   className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800" />
+                   placeholder={t('lifecycle.approvalRefPlaceholder')}
+                   className="input" />
           </label>
-          <label className="flex flex-col gap-1 col-span-2">
-            <span className="text-slate-500 font-semibold uppercase text-[10px]">Remarks</span>
+          <label className="flex flex-col gap-1 sm:col-span-2">
+            <span className="field-label">{t('lifecycle.remarks')}</span>
             <textarea rows={2} value={form.remarks} onChange={e => setForm({ ...form, remarks: e.target.value })}
-                      className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800" />
+                      className="input" />
           </label>
           {form.decision === 'approve' && (
-            <label className="flex items-center gap-2 col-span-2">
+            <label className="flex items-center gap-2 sm:col-span-2 cursor-pointer">
               <input type="checkbox" checked={form.rejoin}
                      onChange={e => setForm({ ...form, rejoin: e.target.checked })}
-                     className="rounded border-slate-300" />
-              <span className="text-slate-700 dark:text-slate-200">Also record actual rejoining / enrolment (mark Rejoined-Active)</span>
+                     className="rounded border-line-strong text-brand-fg focus:ring-ring" />
+              <span className="text-ink-soft">{t('lifecycle.alsoRejoin')}</span>
             </label>
           )}
           {form.decision === 'approve' && form.rejoin && (
-            <label className="flex flex-col gap-1 col-span-2">
-              <span className="text-slate-500 font-semibold uppercase text-[10px]">Rejoin Date</span>
+            <label className="flex flex-col gap-1 sm:col-span-2">
+              <span className="field-label">{t('lifecycle.rejoinDate')}</span>
               <input type="date" value={form.rejoin_date}
                      onChange={e => setForm({ ...form, rejoin_date: e.target.value })}
-                     className="px-2 py-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800" />
+                     className="input" />
             </label>
           )}
         </div>
         <div className="flex justify-end gap-2 pt-2">
-          <button onClick={onClose} className="px-3 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700">Cancel</button>
+          <button onClick={onClose} className="btn btn-ghost">{t('common.cancel')}</button>
           <button onClick={submit} disabled={busy}
-                  className={`px-3 py-1.5 text-xs rounded-lg text-white disabled:opacity-60 inline-flex items-center gap-1 ${form.decision === 'approve' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-rose-600 hover:bg-rose-700'}`}>
-            {form.decision === 'approve' ? <CheckCircle className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
-            {busy ? 'Saving…' : (form.decision === 'approve' ? 'Record approval' : 'Record rejection')}
+                  className={`btn ${form.decision === 'approve' ? 'btn-accent' : 'btn-danger'}`}>
+            {form.decision === 'approve' ? <CheckCircle className="w-3.5 h-3.5" aria-hidden="true" /> : <XCircle className="w-3.5 h-3.5" aria-hidden="true" />}
+            {busy ? t('common.saving') : (form.decision === 'approve' ? t('lifecycle.recordApproval') : t('lifecycle.recordRejection'))}
           </button>
         </div>
       </div>

@@ -472,6 +472,10 @@ CATEGORY_TITLES = {
     "individual": "Individual Student Report",
 }
 
+# A merged student_list cell lists at most this many distinct values before it
+# truncates to "+N more", so one wide column cannot swallow a whole PDF page.
+_LIST_CELL_VALUE_CAP = 12
+
 FIELD_LABELS = {
     "usn": "USN", "name": "Name", "branch": "Branch", "current_sem": "Semester",
     "semester": "Semester", "sgpa": "SGPA", "cgpa": "CGPA", "year": "Year",
@@ -619,28 +623,52 @@ def build_table_report_model(rows: list[dict], user: dict, category: str) -> dic
             # from the caller over HTTP though, so they are NOT already masked:
             # whatever the browser holds, this is the door that decides what the
             # printed file may contain for this role.
-            # A join (e.g. per-semester marks) can hand back the SAME student
-            # repeated with identical values in every displayed column; those
-            # exact duplicates are collapsed so the list reads professionally.
-            # Rows that differ in ANY displayed column are all kept, so no
-            # per-semester / per-record detail is ever lost.
+            # A list is a roster, so one student is printed once. A join (marks
+            # per semester, fees per record) hands the same student back on
+            # several rows; each student's rows are merged into a single line.
+            # A column holding one value across those rows keeps it; a column
+            # that genuinely varies lists its values in row order, so merging
+            # neither invents a value nor throws a per-record detail away.
             headers = _result_headers(rows)
             columns = [(h, field_label(h)) for h in headers]
-            seen: set[tuple] = set()
-            collapsed = 0
+            groups: list[list[dict]] = []
+            group_of: dict[str, int] = {}
             for row in rows:
                 clean = _serialize(mask_for_role(
                     {k: v for k, v in row.items() if k != "dynamic_data"}, role))
-                record = {h: _display_cell(clean.get(h)) for h in headers}
-                key = tuple(record[h] for h in headers)
-                if key in seen:
-                    collapsed += 1
+                cells = {h: _display_cell(clean.get(h)) for h in headers}
+                norm = _norm_usn(clean.get("usn"))
+                # Exact duplicates in every displayed column collapse to one line.
+                # Rows that differ in any displayed column are all kept so no data is lost.
+                key = (norm or "") + "|" + "|".join(_as_str(cells[h]) for h in headers)
+                if key in group_of:
+                    groups[group_of[key]].append(cells)
                     continue
-                seen.add(key)
+                group_of[key] = len(groups)
+                groups.append([cells])
+
+            merged_students = 0
+            for group in groups:
+                if len(group) > 1:
+                    merged_students += 1
+                record = {}
+                for h in headers:
+                    vals = [cells[h] for cells in group]
+                    if len(dict.fromkeys(vals)) == 1:
+                        record[h] = vals[0]
+                        continue
+                    shown = vals[:_LIST_CELL_VALUE_CAP]
+                    text = ", ".join(_as_str(v) for v in shown)
+                    if len(vals) > len(shown):
+                        text += f", +{len(vals) - len(shown)} more"
+                    record[h] = text
                 records.append(record)
+            collapsed = sum(len(g) for g in groups) - len(groups)
             if collapsed:
-                notes.append(f"{collapsed} identical duplicate row(s) from the result were "
-                             f"collapsed into one line each.")
+                notes.append(f"{collapsed} duplicate result row(s) were collapsed and merged so each student "
+                             f"appears on one line; columns that differ between a student's "
+                             f"rows list all of their values in order. Use the Academic report "
+                             f"for one row per semester.")
 
         elif category == "academic":
             academic_map: dict[str, list] = {}

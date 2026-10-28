@@ -5,8 +5,17 @@ Automatically detects API provider based on the key (`nvapi-` for NVIDIA).
 Provides automatic fallback model selection.
 """
 import re
+import time
 import requests
 from config import settings
+
+# A cold cascade over the whole priority list once cost ~4 minutes, because two
+# of the models accept the connection and then stream nothing. One attempt per
+# model is capped, the cascade has a wall-clock budget of its own, and a model
+# that fails is parked so the next request does not pay for it again.
+PER_MODEL_TIMEOUT = (5, 12)   # (connect, read) seconds
+CASCADE_BUDGET = 20           # seconds spent trying models for one request
+MODEL_COOLDOWN = 600          # seconds a failed model stays out of the list
 
 GEMINI_MODEL_PRIORITY = [
     # Modern stable models (fast & resilient to capacity spikes)
@@ -37,6 +46,7 @@ class LLMService:
         fallback_cfg = getattr(settings, "GEMINI_FALLBACK_MODEL", "")
         self._fallback_models: list[str] | None = [fallback_cfg] if fallback_cfg else None
         self._working_model: str | None = None
+        self._parked: dict[str, float] = {}
 
         self.is_nvidia = self.api_key.startswith("nvapi-")
 
@@ -114,7 +124,7 @@ class LLMService:
             }
 
         try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=15)
+            resp = requests.post(url, headers=headers, json=payload, timeout=PER_MODEL_TIMEOUT)
             resp.raise_for_status()
             data = resp.json()
             
@@ -139,9 +149,20 @@ class LLMService:
         except requests.exceptions.RequestException as e:
             return None, f"Network error on {model} ({type(e).__name__})"
 
+    def _is_parked(self, model: str) -> bool:
+        until = self._parked.get(model)
+        if until is None:
+            return False
+        if time.time() >= until:
+            del self._parked[model]
+            return False
+        return True
+
     def generate_query(self, prompt: str) -> str:
         if not self.api_key:
             return "ERROR: API KEY is not set in .env"
+
+        deadline = time.time() + CASCADE_BUDGET
 
         # If we already found a working model this session, try it first
         if self._working_model:
@@ -149,17 +170,28 @@ class LLMService:
             if text is not None:
                 return text
             print(f"[LLM] Cached model {self._working_model} failed: {err}. Re-scanning.")
+            self._parked[self._working_model] = time.time() + MODEL_COOLDOWN
             self._working_model = None
 
         # Full scan through priority list
         errors = []
         for model in self._model_priority_list():
+            if self._is_parked(model):
+                errors.append(f"{model} parked after an earlier failure")
+                continue
+            if time.time() >= deadline:
+                errors.append(f"cascade budget of {CASCADE_BUDGET}s exhausted")
+                print(f"[LLM] Giving up on this request after {CASCADE_BUDGET}s; "
+                      f"remaining models not tried.")
+                break
             text, err = self._try_model(model, prompt)
             if text is not None:
                 print(f"[LLM] Using model: {model}")
                 self._working_model = model  # Cache for next call
+                self._parked.pop(model, None)
                 return text
             errors.append(err)
+            self._parked[model] = time.time() + MODEL_COOLDOWN
             print(f"[LLM] {err}")
 
         # All models failed

@@ -2,11 +2,279 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ── Global smooth theme transitions ─────────────────────────────────────── */
-*, *::before, *::after {
-  transition-property: background-color, border-color, color, fill, stroke, box-shadow;
-  transition-duration: 200ms;
-  transition-timing-function: ease;
+/* ══════════════════════════════════════════════════════════════════════════
+   DESIGN TOKENS — the single source of truth for colour, type, depth and motion.
+
+   Two complete, independently designed themes — not a light theme and its
+   inversion:
+
+     :root        LIGHT · NATURAL IVORY  warm ivory ground, forest green chrome,
+                                          muted teal, champagne highlights
+     html.dark    DARK · MIDNIGHT CAMPUS  midnight navy-slate ground, deep teal
+                                          brand, teal illumination, champagne
+
+   Colours are stored as RGB channels (`255 255 255`) rather than hex so that
+   Tailwind's opacity modifiers (`bg-surface/60`) keep working. tailwind.config
+   maps each channel var to a named utility. Nothing in tailwind.config is a
+   literal colour — that is what keeps both themes consistent across every file.
+
+   60/30/10: `canvas`/`surface`/`sunken` carry the page, `nav`/`brand` carry the
+   chrome, `accent` (champagne) is reserved for the one action the user should
+   take next. Never paint a large area with `accent`.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+@layer base {
+  :root {
+    /* ── Type faces ───────────────────────────────────────────────────
+       No webfont is fetched: this runs on a college network and must
+       render offline. Nirmala UI (Windows) and the Noto families cover
+       Kannada elsewhere, with system fallbacks after them. */
+    --font-ui: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system,
+               Roboto, "Helvetica Neue", Arial, sans-serif;
+    --font-display: "Segoe UI Variable Display", "Segoe UI Semibold", "Segoe UI",
+                    system-ui, -apple-system, Roboto, sans-serif;
+    --font-kannada: "Nirmala UI", "Noto Sans Kannada", "Tunga", "Akshar Unicode",
+                    var(--font-ui);
+
+    /* ── 60% · surfaces — WARM IVORY & DEPARTMENT CREAM ─────────────── */
+    --canvas-rgb:       255 253 247;  /* #FFFDF7 warm ivory ground */
+    --surface-rgb:      255 255 255;  /* #FFFFFF cards, panels */
+    --surface-elev-rgb: 253 250 244;  /* warm ivory elevated — modals, dropdowns */
+    --sunken-rgb:       243 232 208;  /* #F3E8D0 department cream — table heads, inset fields */
+    --cream-rgb:        243 232 208;  /* #F3E8D0 department cream */
+    --beige-rgb:        232 222 208;  /* #E8DED0 soft beige */
+
+    /* ── 30% · chrome — DEEP NAVY STRUCTURE ─────────────────────────── */
+    --nav-rgb:           36 52 75;    /* #24344B deep navy sidebar */
+    --nav-fg-rgb:       255 253 247;  /* #FFFDF7 warm ivory */
+    --nav-fg-mute-rgb:  216 189 138;  /* #D8BD8A champagne gold */
+    --nav-line-rgb:      50 70 98;    /* #324662 navy line */
+    --brand-rgb:         36 52 75;    /* #24344B deep navy */
+    --brand-deep-rgb:    26 38 56;    /* #1A2638 darker navy */
+    --brand-mid-rgb:     48 68 96;    /* #304460 mid navy */
+    --brand-soft-rgb:    72 98 132;   /* #486284 soft navy */
+    --brand-fg-rgb:      36 52 75;    /* #24344B deep navy text/icon */
+
+    /* ── Text ──────────────────────────────────────────────────────── */
+    /* High legibility on cream and ivory surfaces */
+    --ink-rgb:           41 43 48;    /* #292B30 primary text */
+    --ink-soft-rgb:     102 100 95;   /* #66645F secondary text */
+    --ink-mute-rgb:     122 119 113;  /* #7A7771 */
+    --ink-faint-rgb:    158 153 145;  /* #9E9991 */
+
+    /* ── Lines ──────────────────────────────────────────────────────── */
+    --line-rgb:         226 215 198;  /* #E2D7C6 light-theme borders */
+    --line-strong-rgb:  206 193 174;  /* #CEC1AE */
+
+    /* ── 10% · accent — CHAMPAGNE GOLD & TERRACOTTA ─────────────────── */
+    --accent-rgb:        216 189 138;  /* #D8BD8A champagne gold fill */
+    --accent-strong-rgb: 198 168 112;  /* #C6A870 hover fill */
+    --accent-soft-rgb:   243 232 208;  /* #F3E8D0 department cream tint */
+    --accent-ink-rgb:    138 102 46;   /* #8A662E champagne text on tint */
+    --accent-fg-rgb:      36 52 75;    /* #24344B deep navy text on champagne fill */
+    --terracotta-rgb:     182 106 69;  /* #B66A45 muted terracotta */
+    --terracotta-soft-rgb: 250 238 232; /* terracotta soft wash */
+    --terracotta-fg-rgb: 255 255 255;
+
+    /* ── Semantic ──────────────────────────────────────────────────── */
+    --ok-rgb:            34 139 77;   --ok-soft-rgb:   236 248 240;
+    --warn-rgb:         182 106 69;   --warn-soft-rgb: 253 241 233;
+    --err-rgb:          198 40 40;    --err-soft-rgb:  254 238 238;
+    --info-rgb:          36 52 75;    --info-soft-rgb: 235 241 248;
+    --ring-rgb:         216 189 138;  /* champagne gold focus ring */
+    /* Destructive button ramp (top → bottom → hover bottom). */
+    --danger-a-rgb:     214 55 55;
+    --danger-b-rgb:     198 40 40;
+    --danger-c-rgb:     165 30 30;
+
+    /* ── Charts ────────────────────────────────────────────────────── */
+    --chart-1-rgb:  36 52 75;
+    --chart-2-rgb: 216 189 138;
+    --chart-3-rgb: 182 106 69;
+    --chart-4-rgb:  72 98 132;
+    --chart-5-rgb: 198 168 112;
+    --chart-6-rgb: 138 102 46;
+
+    /* ── Shape, depth, motion ───────────────────────────────────────── */
+    --r-sm: 8px;
+    --r-md: 12px;
+    --r-lg: 16px;
+    --r-xl: 22px;
+    /* Navy/warm-tinted shadows: clean and refined on ivory and cream. */
+    --shadow-sm: 0 1px 2px rgb(36 52 75 / 0.05), 0 1px 3px rgb(36 52 75 / 0.04);
+    --shadow-md: 0 6px 18px rgb(36 52 75 / 0.08), 0 2px 6px rgb(36 52 75 / 0.04);
+    --shadow-lg: 0 22px 52px rgb(36 52 75 / 0.14), 0 8px 18px rgb(36 52 75 / 0.07);
+    --shadow-hover: 0 14px 34px rgb(36 52 75 / 0.12), 0 3px 8px rgb(36 52 75 / 0.06);
+    /* Ambient light behind a hero card — layered surface cues. */
+    --glow-brand: 0 0 0 1px rgb(36 52 75 / 0.10), 0 18px 46px rgb(36 52 75 / 0.10);
+    --glow-accent: 0 10px 30px rgb(216 189 138 / 0.25);
+    --dur-fast: 140ms;
+    --dur-base: 220ms;
+    --dur-slow: 360ms;
+    --dur-page: 460ms;
+    --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+    --ease-out: cubic-bezier(0.16, 0.84, 0.28, 1);
+    --ease-in-out: cubic-bezier(0.62, 0.02, 0.34, 1);
+
+    /* ── Glass / photo overlay ──────────────────────────────────────── */
+    --glass-bg-rgb: 255 255 255 / 0.80;
+    --glass-line-rgb: 226 215 198 / 0.8;
+    --glass-edge-rgb: 243 232 208 / 0.65;
+    /* Hover sheen colour. */
+    --sheen-rgb: 216 189 138;
+    --sheen-a: 0.16;
+    --scrim-rgb: 36 52 75 / 0.5;
+    /* Wash between the campus photo and foreground text. Light mode keeps it
+       near-opaque so ink-on-canvas text outside a card still passes contrast. */
+    --photo-wash-rgb: 255 253 247 / 0.84;
+    --photo-scrim-rgb: 255 253 247 / 0.92;
+    --photo-grade: saturate(1.03) contrast(1.02) brightness(1.01);
+    --photo-opacity: 0.86;
+    --emblem-opacity: 0.34;
+
+    /* ── Backwards-compatible aliases ─────────────────────────────── */
+    --bg-primary:   rgb(var(--canvas-rgb));
+    --bg-card:      rgb(var(--surface-rgb));
+    --bg-sidebar:   rgb(var(--nav-rgb));
+    --text-primary: rgb(var(--ink-rgb));
+    --text-muted:   rgb(var(--ink-mute-rgb));
+    --border:       rgb(var(--line-rgb));
+
+    color-scheme: light;
+  }
+
+  /* ────────────────────────────────────────────────────────────────────
+     DARK · MIDNIGHT NAVY & CREAM — designed for deep contrast and focus.
+     Surfaces step up in luminance, borders are navy slate,
+     champagne gold is the refined illumination with warm cream typography.
+     ──────────────────────────────────────────────────────────────────── */
+  html.dark {
+    /* ── 60% · surfaces — DEEP NAVY / CHARCOAL ───────────────────────── */
+    --canvas-rgb:       23 33 48;    /* #172130 deep navy canvas */
+    --surface-rgb:      31 44 63;    /* #1F2C3F deep navy surface */
+    --surface-elev-rgb: 38 53 75;    /* #26354B elevated modals / cards */
+    --sunken-rgb:       26 38 54;    /* #1A2636 sunken headers */
+    --cream-rgb:        243 232 208; /* #F3E8D0 */
+    --beige-rgb:        232 222 208; /* #E8DED0 */
+
+    /* ── 30% · chrome — MIDNIGHT NAVY ───────────────────────────────── */
+    --nav-rgb:          19 28 41;    /* #131C29 midnight navy */
+    --nav-fg-rgb:      255 253 247;  /* #FFFDF7 warm ivory */
+    --nav-fg-mute-rgb: 216 189 138;  /* #D8BD8A champagne gold */
+    --nav-line-rgb:     48 65 90;    /* #30415A */
+    --brand-rgb:        48 68 96;    /* #304460 deep navy fill */
+    --brand-deep-rgb:   31 44 63;
+    --brand-mid-rgb:    60 84 118;
+    --brand-soft-rgb:   92 120 160;  /* soft navy highlight */
+    --brand-fg-rgb:    216 189 138;  /* champagne text on dark surface */
+
+    /* ── Text ───────────────────────────────────────────────────────── */
+    --ink-rgb:        255 253 247;   /* #FFFDF7 warm ivory primary */
+    --ink-soft-rgb:   232 222 208;   /* #E8DED0 soft beige secondary */
+    --ink-mute-rgb:   186 178 166;
+    --ink-faint-rgb:  145 138 128;
+
+    /* ── Lines ─────────────────────────────────────────────────────── */
+    --line-rgb:        48 65 90;
+    --line-strong-rgb: 65 86 118;
+
+    /* ── 10% · accent — CHAMPAGNE GOLD & TERRACOTTA ─────────────────── */
+    --accent-rgb:        216 189 138; /* #D8BD8A */
+    --accent-strong-rgb: 232 207 158;
+    --accent-soft-rgb:    56 46 30;
+    --accent-ink-rgb:    226 200 150;
+    --accent-fg-rgb:      26 38 56;
+    --terracotta-rgb:    202 126 89;
+    --terracotta-soft-rgb: 64 36 24;
+    --terracotta-fg-rgb: 255 255 255;
+
+    /* ── Semantic ───────────────────────────────────────────────────── */
+    --ok-rgb:    105 211 160;  --ok-soft-rgb:   20 48 38;
+    --warn-rgb:  232 150 90;   --warn-soft-rgb: 58 36 18;
+    --err-rgb:   242 133 125;  --err-soft-rgb:  66 23 26;
+    --info-rgb:  150 185 230;  --info-soft-rgb: 24 44 72;
+    --ring-rgb:  216 189 138;
+    /* Destructive button ramp */
+    --danger-a-rgb:   186 52 66;
+    --danger-b-rgb:   158 44 58;
+    --danger-c-rgb:   134 34 46;
+
+    /* ── Charts ────────────────────────────────────────────────────── */
+    --chart-1-rgb: 216 189 138;
+    --chart-2-rgb:  92 120 160;
+    --chart-3-rgb: 202 126 89;
+    --chart-4-rgb: 105 211 160;
+    --chart-5-rgb: 232 150 90;
+    --chart-6-rgb: 242 133 125;
+
+    /* ── Depth / glass ──────────────────────────────────────────────── */
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.45);
+    --shadow-md: 0 8px 22px rgb(0 0 0 / 0.5);
+    --shadow-lg: 0 26px 56px rgb(0 0 0 / 0.62), 0 6px 16px rgb(0 0 0 / 0.4);
+    --shadow-hover: 0 16px 38px rgb(0 0 0 / 0.55);
+    --glow-brand: 0 0 0 1px rgb(92 120 160 / 0.16), 0 18px 46px rgb(92 120 160 / 0.10);
+    --glow-accent: 0 10px 32px rgb(216 189 138 / 0.22);
+    --glass-bg-rgb: 31 44 63 / 0.76;
+    --glass-line-rgb: 186 178 166 / 0.16;
+    --glass-edge-rgb: 186 178 166 / 0.14;
+    --sheen-rgb: 255 255 255;
+    --sheen-a: 0.18;
+    --scrim-rgb: 6 10 18 / 0.7;
+    --photo-wash-rgb: 23 33 48 / 0.60;
+    --photo-scrim-rgb: 23 33 48 / 0.78;
+    --photo-grade: saturate(1.06) contrast(1.05) brightness(0.92);
+    --photo-opacity: 0.74;
+    --emblem-opacity: 0.28;
+
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-canvas text-ink antialiased;
+    font-family: var(--font-ui);
+    font-size: 15px;
+    line-height: 1.55;
+    min-height: 100vh;
+  }
+
+  /* Kannada needs a taller line and a font with the right metrics.
+     Nirmala UI ships with Windows; the rest are fallbacks for Linux/Android.
+     No webfont is fetched — the app must work on a college network. */
+  :lang(kn), .font-kannada {
+    font-family: var(--font-kannada);
+    line-height: 1.75;
+  }
+
+  h1, h2, h3, h4 {
+    @apply text-ink;
+    font-family: var(--font-display);
+    font-weight: 650;
+    letter-spacing: -0.014em;
+    text-wrap: balance;
+  }
+
+  /* One focus treatment, app-wide. */
+  :focus-visible {
+    outline: 2px solid rgb(var(--ring-rgb));
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  ::selection {
+    background: rgb(var(--accent-rgb) / 0.26);
+  }
+}
+
+/* Theme switch — colour-only transition, so a flip fades and nothing else
+   drifts. It lives in @layer base on purpose: an unlayered rule would outrank
+   `.btn`'s and Tailwind's own `transition-*` utilities, silently killing every
+   transform/opacity transition in the app. */
+@layer base {
+  *, *::before, *::after {
+    transition-property: background-color, border-color, color, fill, stroke, box-shadow;
+    transition-duration: var(--dur-base);
+    transition-timing-function: var(--ease);
+  }
 }
 
 /* Disable transitions on elements that shouldn't animate (e.g. spinners) */
@@ -14,87 +282,780 @@
   transition: none !important;
 }
 
-@layer base {
-  /* Light mode defaults */
-  :root {
-    --bg-primary:   #f8fafc;
-    --bg-card:      #ffffff;
-    --bg-sidebar:   #0f172a;
-    --text-primary: #0f172a;
-    --text-muted:   #64748b;
-    --border:       #e2e8f0;
-  }
-
-  body {
-    @apply bg-slate-50 text-slate-900;
-  }
-
-  /* Dark mode overrides applied to <html class="dark"> */
-  html.dark body {
-    @apply bg-slate-950 text-slate-100;
+/* §9: motion is opt-out for users who ask for it. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
   }
 }
 
-/* ── Dark mode component overrides ──────────────────────────────────────── */
-html.dark .dash-main        { @apply bg-slate-950; }
-html.dark .dash-card        { @apply bg-slate-900 border-slate-700; }
-html.dark .dash-header      { @apply bg-slate-900 border-slate-700; }
-html.dark .dash-input       { @apply bg-slate-800 border-slate-600 text-slate-100 placeholder-slate-400; }
-html.dark .dash-table-head  { @apply bg-slate-800 border-slate-700; }
-html.dark .dash-table-row   { @apply hover:bg-slate-800/60; }
-html.dark .dash-table-cell  { @apply text-slate-300 border-slate-700; }
-html.dark .dash-modal       { @apply bg-slate-900 border-slate-700; }
-html.dark .dash-dropdown    { @apply bg-slate-900 border-slate-700; }
-html.dark .dash-badge-blue  { @apply bg-blue-900/40 text-blue-300 border-blue-700; }
-html.dark .dash-text-muted  { @apply text-slate-400; }
-html.dark .dash-divider     { @apply border-slate-700; }
+@layer components {
+  /* ── Surfaces — layered, never flat grey boxes ────────────────────── */
+  .card {
+    @apply bg-surface border border-line rounded-lg;
+    box-shadow: var(--shadow-sm);
+    /* A 1px top light + the surface colour: the minimum that reads as a
+       raised panel rather than a painted rectangle. */
+    background-image: linear-gradient(180deg,
+      rgb(var(--glass-edge-rgb) / 0.5), transparent 34%);
+  }
+  .card-elev {
+    @apply bg-surface-elev border border-line rounded-lg;
+    box-shadow: var(--shadow-md);
+    background-image: linear-gradient(180deg,
+      rgb(var(--glass-edge-rgb) / 0.6), transparent 38%);
+  }
+  .panel {
+    @apply bg-surface border border-line rounded-lg p-4 sm:p-5;
+    box-shadow: var(--shadow-sm);
+  }
+  .sunken {
+    @apply bg-sunken border border-line rounded-md;
+    box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.05);
+  }
+  .divide-line > * + * {
+    border-top: 1px solid rgb(var(--line-rgb));
+  }
 
-/* ── Custom scrollbar ────────────────────────────────────────────────────── */
-::-webkit-scrollbar        { width: 6px; height: 6px; }
-::-webkit-scrollbar-track  { background: transparent; }
-::-webkit-scrollbar-thumb  { background: #475569; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #64748b; }
+  /* Gradient-washed hero surface — the 30% field behind a headline. */
+  .brand-field {
+    background-image: linear-gradient(135deg,
+      rgb(var(--brand-deep-rgb)),
+      rgb(var(--brand-rgb)) 52%,
+      rgb(var(--brand-mid-rgb)));
+    @apply text-white;
+  }
 
-html.dark ::-webkit-scrollbar-thumb { background: #334155; }
-html.dark ::-webkit-scrollbar-thumb:hover { background: #475569; }
+  /* §2: refined glass — used over the college photo and on auth panels. */
+  .glass {
+    background: rgb(var(--glass-bg-rgb));
+    backdrop-filter: blur(20px) saturate(1.35);
+    -webkit-backdrop-filter: blur(20px) saturate(1.35);
+    border: 1px solid rgb(var(--glass-line-rgb));
+    border-radius: var(--r-lg);
+    /* The inset highlight is what separates glass from a flat grey box. */
+    box-shadow: var(--shadow-lg), inset 0 1px 0 rgb(var(--glass-edge-rgb));
+  }
 
-/* ── Glassmorphism card ───────────────────────────────────────────────────── */
-.glass-card {
-  background: rgba(255,255,255,0.7);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255,255,255,0.3);
+  /* ── Typography (§7): deliberate, responsive, Kannada-safe ────────── */
+  /* clamp() keeps headings bold on a laptop without oversized text on a
+     tablet; Kannada's taller line-height comes from :lang(kn) in @layer base,
+     so nothing here clips the descriptors. */
+  .t-page    { font-size: clamp(26px, 2.35vw, 34px); line-height: 1.16; font-weight: 700;
+               letter-spacing: -0.02em; font-family: var(--font-display); }
+  .t-section { font-size: clamp(21px, 1.75vw, 24px); line-height: 1.24; font-weight: 650;
+               letter-spacing: -0.015em; font-family: var(--font-display); }
+  .t-card    { font-size: clamp(17px, 1.25vw, 20px); line-height: 1.3; font-weight: 620; }
+  .t-body    { font-size: 16px; line-height: 1.6; }
+  .t-table   { font-size: 15px; line-height: 1.5; }
+  .t-label   { font-size: 14px; font-weight: 600; letter-spacing: 0.005em; }
+  .t-support { font-size: 13px; line-height: 1.5; }
+  .t-mute    { @apply text-ink-mute; }
+  .t-truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Numeric values in stat cards: tabular so a refresh doesn't jitter width. */
+  .t-value   { font-family: var(--font-display); font-weight: 700; letter-spacing: -0.02em;
+               font-variant-numeric: tabular-nums; font-size: clamp(22px, 2vw, 28px);
+               line-height: 1.1; }
+  /* Small caps-style label above a heading. Latin: uppercase + wide tracking.
+     Kannada has no letter case and its conjuncts come apart under wide
+     tracking, so :lang(kn) relaxes both instead of shipping a broken look. */
+  .eyebrow   { text-transform: uppercase; letter-spacing: 0.1em; font-weight: 600; }
+  :lang(kn) .eyebrow { text-transform: none; letter-spacing: 0.01em; }
+  /* Tight Latin display tracking would crush Kannada descriptors together. */
+  :lang(kn) .t-page, :lang(kn) .t-section, :lang(kn) .t-value { letter-spacing: 0; }
+
+  /* ── Buttons ────────────────────────────────────────────────────────── */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md font-medium
+           border select-none cursor-pointer
+           disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none;
+    padding: 0.55rem 0.95rem;
+    font-size: 14px;
+    line-height: 1.2;
+    min-height: 40px;
+    transition-property: background-color, border-color, color, box-shadow, transform;
+    transition-duration: var(--dur-fast);
+    transition-timing-function: var(--ease-out);
+  }
+  /* Buttons breathe on hover and settle on press: one point of lift is enough
+     to make a click feel physical without moving anything around them. */
+  .btn:not(:disabled):hover { transform: translateY(-1px); }
+  .btn:active { transform: translateY(1px) scale(0.995); }
+  .btn-sm { padding: 0.32rem 0.65rem; min-height: 32px; font-size: 13px; }
+  .btn-lg { padding: 0.75rem 1.2rem; min-height: 48px; font-size: 15px; }
+
+  .btn-primary {
+    background-image: linear-gradient(180deg,
+      rgb(var(--brand-mid-rgb)), rgb(var(--brand-rgb)));
+    @apply text-white border-transparent;
+    box-shadow: var(--shadow-sm), inset 0 1px 0 rgb(255 255 255 / 0.14);
+  }
+  .btn-primary:hover:not(:disabled) {
+    background-image: linear-gradient(180deg,
+      rgb(var(--brand-soft-rgb)), rgb(var(--brand-mid-rgb)));
+    box-shadow: var(--shadow-md), inset 0 1px 0 rgb(255 255 255 / 0.18);
+  }
+
+  /* Champagne is the 10%: the single action on a screen. */
+  .btn-accent {
+    background-image: linear-gradient(180deg,
+      rgb(var(--accent-strong-rgb)), rgb(var(--accent-rgb)));
+    color: rgb(var(--accent-fg-rgb));
+    @apply border-transparent font-semibold;
+    box-shadow: var(--shadow-sm), var(--glow-accent);
+  }
+  .btn-accent:hover:not(:disabled) {
+    background-image: linear-gradient(180deg,
+      rgb(var(--accent-rgb)), rgb(var(--accent-ink-rgb)));
+  }
+
+  .btn-ghost {
+    @apply border-line text-ink-soft;
+    background-color: rgb(var(--surface-rgb) / 0.6);
+  }
+  .btn-ghost:hover:not(:disabled) { @apply bg-sunken text-ink; }
+
+  /* Destructive stays red in both themes — that is the point — but the ramp is
+     a token, not a literal: Midnight Campus uses a deeper, lower-chroma crimson
+     so a delete button never reads as neon against the navy ground. All three
+     stops keep white label text above 4.5:1. */
+  .btn-danger {
+    @apply border-transparent text-white;
+    background-image: linear-gradient(180deg, rgb(var(--danger-a-rgb)), rgb(var(--danger-b-rgb)));
+  }
+  .btn-danger:hover:not(:disabled) {
+    background-image: linear-gradient(180deg, rgb(var(--danger-b-rgb)), rgb(var(--danger-c-rgb)));
+  }
+
+  .btn-danger-soft {
+    @apply border-transparent;
+    background: rgb(var(--err-soft-rgb));
+    color: rgb(var(--err-rgb));
+  }
+
+  /* ── Forms ──────────────────────────────────────────────────────────── */
+  .field-label {
+    @apply t-label text-ink-soft mb-1.5 block;
+  }
+  .input {
+    @apply w-full rounded-md border border-line bg-surface text-ink text-[15px];
+    padding: 0.62rem 0.85rem;
+    min-height: 44px;
+    transition-property: border-color, box-shadow, background-color;
+    transition-duration: var(--dur-fast);
+  }
+  .input::placeholder { @apply text-ink-faint; }
+  .input:hover { @apply border-line-strong; }
+  .input:focus {
+    @apply border-brand;
+    outline: 2px solid rgb(var(--ring-rgb) / 0.7);
+    outline-offset: 1px;
+    box-shadow: 0 0 0 4px rgb(var(--ring-rgb) / 0.12);
+  }
+  .input:disabled { @apply bg-sunken text-ink-mute cursor-not-allowed; }
+  textarea.input { min-height: 100px; line-height: 1.55; }
+  select.input { padding-right: 2rem; }
+
+  /* ── Data tables ────────────────────────────────────────────────────── */
+  .table-wrap {
+    @apply card overflow-hidden;
+  }
+  .table-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .th {
+    @apply t-table text-left font-semibold text-ink-soft whitespace-nowrap;
+    background: rgb(var(--sunken-rgb));
+    padding: 0.7rem 0.9rem;
+    border-bottom: 1px solid rgb(var(--line-rgb));
+  }
+  .td {
+    @apply t-table text-ink-soft;
+    padding: 0.66rem 0.9rem;
+    border-bottom: 1px solid rgb(var(--line-rgb));
+    /* USNs, names and addresses must not be clipped silently. */
+    max-width: 26rem;
+  }
+  .tr-hover:hover {
+    background: rgb(var(--accent-rgb) / 0.10);
+    box-shadow: inset 2px 0 0 rgb(var(--accent-rgb) / 0.85);
+  }
+
+  /* ── Badges / pills ─────────────────────────────────────────────────── */
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-full font-medium;
+    padding: 0.16rem 0.58rem;
+    font-size: 12px;
+    line-height: 1.45;
+    border: 1px solid transparent;
+    white-space: nowrap;
+  }
+  .badge-brand  { background: rgb(var(--brand-rgb) / 0.12); color: rgb(var(--brand-fg-rgb)); }
+  .badge-ok     { background: rgb(var(--ok-soft-rgb)); color: rgb(var(--ok-rgb)); }
+  .badge-warn   { background: rgb(var(--warn-soft-rgb)); color: rgb(var(--warn-rgb)); }
+  .badge-err    { background: rgb(var(--err-soft-rgb)); color: rgb(var(--err-rgb)); }
+  .badge-info   { background: rgb(var(--info-soft-rgb)); color: rgb(var(--info-rgb)); }
+  .badge-accent { background: rgb(var(--accent-soft-rgb)); color: rgb(var(--accent-ink-rgb)); }
+  .badge-quiet  { background: rgb(var(--sunken-rgb)); color: rgb(var(--ink-mute-rgb)); border-color: rgb(var(--line-rgb)); }
+
+  /* ── Overlays (one z-index scale: popover 50 · nav 40 · backdrop 60 ·
+        modal 61 · toaster 70) ─────────────────────────────────────────── */
+  .backdrop {
+    @apply fixed inset-0 flex items-center justify-center p-4;
+    z-index: 60;
+    background: rgb(var(--scrim-rgb));
+    backdrop-filter: blur(4px) saturate(1.1);
+    -webkit-backdrop-filter: blur(4px) saturate(1.1);
+    animation: fade-in var(--dur-base) var(--ease) both;
+  }
+  .modal-panel {
+    @apply card-elev w-full;
+    max-height: calc(100vh - 2rem);
+    max-width: 42rem;
+    overflow-y: auto;
+    z-index: 61;
+    animation: modal-in var(--dur-base) var(--ease-out) both;
+  }
+  .popover {
+    @apply card-elev;
+    z-index: 50;
+    animation: scale-in var(--dur-fast) var(--ease-out) both;
+  }
+  .toaster { z-index: 70; }
+
+  /* ── Empty / loading states ─────────────────────────────────────────── */
+  .empty-state {
+    @apply flex flex-col items-center justify-center text-center;
+    gap: 0.5rem;
+    padding: 2.5rem 1rem;
+    color: rgb(var(--ink-mute-rgb));
+  }
+  .skeleton {
+    border-radius: var(--r-sm);
+    background: linear-gradient(90deg,
+      rgb(var(--sunken-rgb)) 25%,
+      rgb(var(--line-rgb)) 50%,
+      rgb(var(--sunken-rgb)) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s var(--ease-in-out) infinite;
+  }
 }
-html.dark .glass-card {
-  background: rgba(15,23,42,0.7);
-  border: 1px solid rgba(255,255,255,0.08);
-}
 
-/* ── Shimmer loading animation ───────────────────────────────────────────── */
+/* ══════════════════════════════════════════════════════════════════════════
+   MOTION PRIMITIVES
+   CSS-only on purpose: no animation library is installed and §11 forbids
+   unrelated dependency changes. Durations are short (140–460ms) and every
+   entrance uses `both` so an element never flashes its final state early.
+   ══════════════════════════════════════════════════════════════════════════ */
 @keyframes shimmer {
   0%   { background-position: -200% 0; }
   100% { background-position:  200% 0; }
 }
-.shimmer {
-  background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%);
-  background-size: 200% 100%;
-  animation: shimmer 1.4s infinite;
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
-html.dark .shimmer {
-  background: linear-gradient(90deg, #1e293b 25%, #334155 50%, #1e293b 75%);
-  background-size: 200% 100%;
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
-
-/* ── Slide-down animation for dropdown ───────────────────────────────────── */
+@keyframes scale-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.985); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes modal-in {
+  from { opacity: 0; transform: translateY(14px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
 @keyframes slideDown {
   from { opacity: 0; transform: translateY(-6px); }
   to   { opacity: 1; transform: translateY(0); }
 }
-.slide-down { animation: slideDown 0.15s ease-out; }
-
-/* ── Toast slide-in ──────────────────────────────────────────────────────── */
 @keyframes slideInRight {
   from { opacity: 0; transform: translateX(24px); }
   to   { opacity: 1; transform: translateX(0); }
 }
-.toast-enter { animation: slideInRight 0.25s ease-out; }
+@keyframes row-flash {
+  from { background-color: rgb(var(--accent-rgb) / 0.22); }
+  to   { background-color: transparent; }
+}
+/* Route/screen entrance: a short rise, no blank frame, no layout shift. */
+@keyframes page-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+/* Chart/surface draw-in: opacity + a clipped wipe, cheap to composite. */
+@keyframes reveal-x {
+  from { opacity: 0; clip-path: inset(0 100% 0 0); }
+  to   { opacity: 1; clip-path: inset(0 0 0 0); }
+}
+/* One-shot sheen for a hero card. Never loops. */
+@keyframes sheen {
+  from { transform: translateX(-120%) skewX(-12deg); }
+  to   { transform: translateX(220%) skewX(-12deg); }
+}
+/* Language switch: Kannada and English reflow text, so the swap is masked by a
+   brief opacity dip on the root instead of a visible jump. */
+@keyframes lang-shift {
+  0%   { opacity: 1; }
+  35%  { opacity: 0.93; }
+  100% { opacity: 1; }
+}
+
+.anim-fade-up   { animation: fade-up var(--dur-slow) var(--ease-out) both; }
+.anim-fade-in   { animation: fade-in var(--dur-base) var(--ease) both; }
+.anim-scale-in  { animation: scale-in var(--dur-base) var(--ease-out) both; }
+.anim-page      { animation: page-in var(--dur-page) var(--ease-out) both; }
+.anim-reveal    { animation: reveal-x var(--dur-page) var(--ease-out) both; }
+.lang-shift     { animation: lang-shift var(--dur-base) var(--ease) 1; }
+.slide-down     { animation: slideDown var(--dur-fast) var(--ease) both; }
+.toast-enter    { animation: slideInRight var(--dur-base) var(--ease-out) both; }
+.row-flash      { animation: row-flash 1.6s var(--ease) 1; }
+
+/* Stagger card entrances without animating each text node. */
+.stagger > * { animation: fade-up var(--dur-slow) var(--ease-out) both; }
+.stagger > *:nth-child(2) { animation-delay: 45ms; }
+.stagger > *:nth-child(3) { animation-delay: 90ms; }
+.stagger > *:nth-child(4) { animation-delay: 135ms; }
+.stagger > *:nth-child(5) { animation-delay: 180ms; }
+.stagger > *:nth-child(6) { animation-delay: 225ms; }
+.stagger > *:nth-child(7) { animation-delay: 270ms; }
+.stagger > *:nth-child(8) { animation-delay: 315ms; }
+
+/* ── In-flight and arrival motion ─────────────────────────────────────────
+   Tied to the real request lifecycle, never faked: `fetch-bar` and the
+   skeleton list mount while a query is in flight, and the row cascade plays
+   once when the result replaces them (and again on page or sort change,
+   because that <tbody> remounts). */
+@keyframes fetch-sweep {
+  0%   { transform: translateX(-102%); }
+  100% { transform: translateX(272%); }
+}
+@keyframes row-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.fetch-bar {
+  position: relative;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgb(var(--brand-rgb) / 0.14);
+}
+.fetch-bar::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 36%;
+  border-radius: 999px;
+  background: linear-gradient(90deg,
+    transparent,
+    rgb(var(--brand-rgb)) 40%,
+    rgb(var(--accent-rgb)) 88%,
+    transparent);
+  animation: fetch-sweep 1.15s var(--ease) infinite;
+}
+.rows-in > tr { animation: row-in var(--dur-base) var(--ease-out) both; }
+.rows-in > tr:nth-child(1)  { animation-delay: 0ms; }
+.rows-in > tr:nth-child(2)  { animation-delay: 35ms; }
+.rows-in > tr:nth-child(3)  { animation-delay: 70ms; }
+.rows-in > tr:nth-child(4)  { animation-delay: 105ms; }
+.rows-in > tr:nth-child(5)  { animation-delay: 140ms; }
+.rows-in > tr:nth-child(6)  { animation-delay: 175ms; }
+.rows-in > tr:nth-child(n+7) { animation-delay: 210ms; }
+/* Skeleton list: the shape of the answer, not an invented answer. */
+.skeleton-list { display: flex; flex-direction: column; gap: 0.55rem; }
+.skeleton-list .skeleton { height: 0.85rem; border-radius: 7px; }
+
+/* Hover elevation for interactive cards — transform + shadow only, so the
+   compositor does the work and no sibling reflows. */
+.lift {
+  transition-property: transform, box-shadow, border-color;
+  transition-duration: var(--dur-base);
+  transition-timing-function: var(--ease-out);
+  will-change: transform;
+}
+.lift:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-hover);
+  border-color: rgb(var(--accent-rgb) / 0.55);
+}
+/* Border/gradient response on interaction, for stat and tile cards. */
+.card-interactive { position: relative; overflow: hidden; }
+.card-interactive::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  background: linear-gradient(135deg,
+    rgb(var(--brand-soft-rgb) / 0.14), transparent 46%,
+    rgb(var(--accent-rgb) / 0.14));
+  transition: opacity var(--dur-base) var(--ease);
+}
+.card-interactive:hover::after { opacity: 1; }
+.card-interactive .sheen {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 38%;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgb(var(--sheen-rgb) / var(--sheen-a)), transparent);
+  opacity: 0;
+}
+.card-interactive:hover .sheen { opacity: 1; animation: sheen 900ms var(--ease-out) 1; }
+
+/* Animated active-navigation indicator: the rail slides to the active row
+   instead of the highlight popping in. */
+/* ── Sidebar navigation ──────────────────────────────────────────────────
+   Built for staff who live in this rail all day: 15px labels, a generous hit
+   target, and an icon tile that takes the brand colour so the active section
+   is obvious without reading the text. Group labels sit above each block and
+   drop away when the rail collapses to icons. */
+.nav-group-label {
+  @apply font-semibold uppercase;
+  font-size: 11px;
+  letter-spacing: 0.09em;
+  color: rgb(var(--nav-fg-mute-rgb) / 0.85);
+  padding: 0 0.62rem;
+  margin: 0.85rem 0 0.3rem;
+}
+.nav-group-label:first-child { margin-top: 0; }
+
+.nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  padding: 0.42rem 0.5rem;
+  border-radius: var(--r-sm);
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.35;
+  color: rgb(var(--nav-fg-rgb) / 0.86);
+  transition: background-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+  transform-origin: left center;
+}
+/* The active marker: a gradient bar that grows out of the rail edge. */
+.nav-item::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 3px;
+  height: 0;
+  border-radius: 0 3px 3px 0;
+  background: linear-gradient(180deg, rgb(var(--brand-soft-rgb)), rgb(var(--accent-rgb)));
+  transform: translateY(-50%);
+  transition: height var(--dur-base) var(--ease-out);
+}
+.nav-item[data-active="true"]::before { height: 62%; }
+/* Hover: the whole tile swells slightly, anchored to the rail so it grows
+   outward instead of drifting. Identical for every nav option, active or not,
+   so the rail reads as one control surface. */
+.nav-item:hover {
+  color: rgb(var(--nav-fg-rgb));
+  background: rgb(255 255 255 / 0.07);
+  transform: scale(1.028);
+}
+.nav-item:active { transform: scale(0.99); }
+.nav-item[data-active="true"] {
+  color: #fff;
+  background: linear-gradient(90deg, rgb(var(--brand-rgb)), rgb(var(--brand-mid-rgb) / 0.82));
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgb(255 255 255 / 0.12);
+}
+.nav-item[data-active="true"]:hover { transform: scale(1.028); }
+.nav-item__icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 1.95rem;
+  height: 1.95rem;
+  border-radius: 9px;
+  color: rgb(var(--nav-fg-mute-rgb));
+  background: rgb(255 255 255 / 0.06);
+  transition: background-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    transform var(--dur-base) var(--ease-out);
+}
+.nav-item:hover .nav-item__icon {
+  color: rgb(var(--nav-fg-rgb));
+  background: rgb(255 255 255 / 0.13);
+  transform: scale(1.1);
+}
+.nav-item[data-active="true"] .nav-item__icon {
+  color: #fff;
+  background: rgb(255 255 255 / 0.18);
+}
+.nav-item__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Collapsed rail: the tile centres and becomes the whole target. */
+.nav-item.is-compact { justify-content: center; padding-left: 0; padding-right: 0; transform-origin: center; }
+.nav-item.is-compact .nav-item__icon { width: 2.35rem; height: 2.35rem; }
+
+/* Sidebar shell (§4C): the same element slides in as a mobile drawer and
+   narrows to an icon rail on desktop, so both gestures share one motion
+   curve rather than each inventing their own. */
+.nav-shell {
+  transition-property: transform, width;
+  transition-duration: var(--dur-page);
+  transition-timing-function: var(--ease-out);
+}
+
+/* Welcome hero: the query tab's pre-result identity surface. Copy side is
+   token-driven so it reads correctly in both themes; the campus photograph it
+   used to frame now lives in the shared page ground (`.dash-bg.has-photo`),
+   which keeps it legible without competing with the results. */
+.welcome-hero {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border-radius: var(--r-xl);
+  border: 1px solid rgb(var(--line-rgb));
+  box-shadow: var(--shadow-md);
+  background:
+    radial-gradient(620px 200px at 96% -10%, rgb(var(--brand-soft-rgb) / 0.18), transparent 68%),
+    linear-gradient(118deg,
+      rgb(var(--surface-rgb)) 0%,
+      rgb(var(--surface-rgb)) 52%,
+      rgb(var(--brand-deep-rgb) / 0.07) 100%);
+}
+/* Hairline champagne edge along the bottom — the same accent the auth panel
+   uses, so login and dashboard read as one product. */
+.welcome-hero::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  z-index: 2;
+  pointer-events: none;
+  background: linear-gradient(90deg,
+    transparent,
+    rgb(var(--accent-rgb) / 0.55) 22%,
+    rgb(var(--accent-rgb) / 0.55) 78%,
+    transparent);
+}
+
+/* ── Dashboard photo / treatment background ───────────────────────────── */
+.dash-bg {
+  /* No `position` here: the shell sizes this layer with `absolute inset-0`, and
+     a `relative` in this layer would win on source order and collapse it. */
+  isolation: isolate;
+  overflow: hidden;
+}
+/* Ambient gradient lighting: the page ground is never a flat fill. */
+.dash-bg::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(1100px 520px at 88% -8%, rgb(var(--brand-soft-rgb) / 0.18), transparent 70%),
+    radial-gradient(820px 460px at -6% 104%, rgb(var(--accent-rgb) / 0.1), transparent 68%),
+    linear-gradient(180deg, rgb(var(--brand-rgb) / 0.05), transparent 42%);
+}
+/* ── Campus photograph as the dashboard page ground ─────────────────────
+   The photograph is the background of the product, with the interface layered
+   on top of it — not a framed picture placed inside the layout. The auth pages
+   use their own ground (`.auth-bg`, below) with the university emblem.
+
+   The supplied original is 335×335. Shown `cover` across a viewport it is
+   upscaled and soft, so it is treated as atmosphere: graded, veiled by the
+   theme's own canvas colour, and never asked to carry legibility. Dropping a
+   higher-resolution file at the same path needs no code change. */
+.dash-bg.has-photo::after {
+  content: "";
+  position: absolute;
+  inset: -3%;            /* the drift below never exposes a bare edge */
+  /* -2, not -1: the photograph must sit *under* the veil in `.dash-bg::before`,
+     which shares the same negative plane. */
+  z-index: -2;
+  pointer-events: none;
+  /* --plate-o, not `opacity`, is what the entrance animates towards: a
+     `both` fill on an opacity keyframe would otherwise pin the layer at
+     opacity 1 and silently ignore --photo-opacity forever. */
+  --plate-o: var(--photo-opacity);
+  opacity: var(--plate-o);
+  background: url('/college-photo.jpg') center 26% / cover no-repeat;
+  filter: var(--photo-grade);
+  animation:
+    plate-in var(--dur-slow) var(--ease) both,
+    campus-drift 52s var(--ease) var(--dur-slow) infinite alternate;
+  will-change: transform;
+}
+@keyframes plate-in {
+  from { opacity: 0; }
+  to   { opacity: var(--plate-o); }
+}
+/* Slow Ken Burns drift. */
+@keyframes campus-drift {
+  from { transform: scale(1.02) translate3d(0, 0, 0); }
+  to   { transform: scale(1.09) translate3d(-1.6%, -2.2%, 0); }
+}
+/* The veil that keeps foreground text legible over the photograph. It is
+   heaviest where the content lives and clears toward the outer corner, so the
+   campus emerges at the edge of the page instead of sitting under the tables. */
+.dash-bg.has-photo::before {
+  background:
+    radial-gradient(1100px 520px at 88% -8%, rgb(var(--brand-soft-rgb) / 0.12), transparent 70%),
+    radial-gradient(820px 460px at -6% 104%, rgb(var(--accent-rgb) / 0.08), transparent 68%),
+    linear-gradient(105deg,
+      rgb(var(--canvas-rgb) / 0.78) 0%,
+      rgb(var(--canvas-rgb) / 0.76) 46%,
+      rgb(var(--canvas-rgb) / 0.5) 78%,
+      rgb(var(--canvas-rgb) / 0.24) 100%);
+}
+/* ── Auth pages: the VTU emblem as the page ground ────────────────────────
+   Login, register and password reset share one stage. The university emblem IS
+   the background — large, centred, breathing slowly — and the form is laid over
+   it on glass in the middle of the page. No framed picture, no split panel: the
+   page reads as VTU's at a glance, and the eye lands on the card. */
+.auth-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  background:
+    radial-gradient(1100px 620px at 50% -14%, rgb(var(--brand-soft-rgb) / 0.3), transparent 68%),
+    radial-gradient(760px 520px at 6% 106%, rgb(var(--accent-rgb) / 0.12), transparent 66%),
+    radial-gradient(820px 560px at 96% 96%, rgb(var(--brand-mid-rgb) / 0.16), transparent 66%),
+    linear-gradient(180deg, rgb(var(--canvas-rgb)), rgb(var(--sunken-rgb)));
+}
+/* The seal. `contain` keeps its own proportions at every viewport, and the slow
+   scale is a breath rather than a bounce, so the page feels alive without ever
+   moving the form. */
+.auth-bg::before {
+  --plate-o: var(--emblem-opacity);
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 47%;
+  width: min(104vw, 820px);
+  aspect-ratio: 738 / 411;
+  transform: translate(-50%, -50%);
+  opacity: var(--plate-o);
+  background: url('/vtu-emblem.png') center / contain no-repeat;
+  filter: var(--photo-grade);
+  animation:
+    plate-in var(--dur-page) var(--ease-out) both,
+    emblem-breath 24s var(--ease) var(--dur-page) infinite alternate;
+  will-change: transform;
+}
+@keyframes emblem-breath {
+  from { transform: translate(-50%, -50%) scale(1); }
+  to   { transform: translate(-50%, -51.5%) scale(1.05); }
+}
+/* One champagne-and-teal ring turning behind the card: the accent that makes the
+   ground read as lit rather than painted. Masked to a thin hoop so it never
+   becomes a second shape to look at. */
+.auth-bg__ring {
+  position: absolute;
+  left: 50%;
+  top: 47%;
+  width: min(126vw, 980px);
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  opacity: 0.62;
+  background: conic-gradient(from 0deg,
+    transparent 0deg,
+    rgb(var(--accent-rgb) / 0.55) 46deg,
+    transparent 120deg,
+    transparent 200deg,
+    rgb(var(--terracotta-rgb) / 0.55) 268deg,
+    transparent 340deg);
+  -webkit-mask: radial-gradient(closest-side, transparent 80%, #000 81%, #000 93%, transparent 94%);
+          mask: radial-gradient(closest-side, transparent 80%, #000 81%, #000 93%, transparent 94%);
+  animation: ring-turn 52s linear infinite;
+}
+@keyframes ring-turn {
+  to { transform: translate(-50%, -50%) rotate(360deg); }
+}
+/* The veil under the card: emblem and ring fade out where the form sits, so
+   labels, placeholders and the glass edge never fight the artwork. */
+.auth-bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(560px 470px at 50% 50%,
+    rgb(var(--canvas-rgb) / 0.6) 0%,
+    rgb(var(--canvas-rgb) / 0.32) 48%,
+    transparent 74%);
+}
+@media (max-width: 640px) {
+  /* A phone viewport is mostly content, so the photograph steps back. */
+  .dash-bg.has-photo::after { --plate-o: calc(var(--photo-opacity) * 0.55); }
+  /* On a phone the card nearly fills the screen: the ring would only be a
+     bright arc crossing it, so the emblem alone carries the identity. */
+  .auth-bg__ring { display: none; }
+}
+
+/* ── Department identity — set --dept-a/--dept-b on a container ───────── */
+.dept-tint::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(120deg,
+    rgb(var(--dept-a, 36 52 75) / 0.12),
+    rgb(var(--dept-b, 72 98 132) / 0.04) 55%,
+    transparent);
+}
+
+/* ── Custom scrollbar ────────────────────────────────────────────────────── */
+::-webkit-scrollbar        { width: 10px; height: 10px; }
+::-webkit-scrollbar-track  { background: transparent; }
+::-webkit-scrollbar-thumb  {
+  background: rgb(var(--ink-faint-rgb) / 0.5);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: rgb(var(--ink-mute-rgb) / 0.8); }
+
+/* ── Reduced motion: entrance states become static, nothing loops ─────── */
+@media (prefers-reduced-motion: reduce) {
+  .stagger > *, .anim-fade-up, .anim-scale-in, .anim-page, .anim-reveal,
+  .row-flash, .card-interactive:hover .sheen, .dash-bg.has-photo::after,
+  .auth-bg::before, .auth-bg__ring,
+  .rows-in > tr, .fetch-bar::after,
+  .lang-shift {
+    animation: none;
+  }
+  /* A sweep that cannot sweep is just a bar, so give the wait state a
+     static, legible fill instead of an empty track. */
+  .fetch-bar::after { width: 100%; opacity: 0.55; }
+  .lift:hover { transform: none; }
+  /* A zoom you cannot opt out of is a broken promise: keep the rail and the
+     buttons static, and let only the colour change answer the pointer. */
+  .nav-item:hover, .nav-item:active, .nav-item:hover .nav-item__icon,
+  .btn:not(:disabled):hover, .btn:active { transform: none; }
+  .backdrop, .modal-panel, .popover { animation: none; }
+  .nav-shell { transition: none; }
+}
+
+/* ── Print ─────────────────────────────────────────────────────────────── */
+@media print {
+  .no-print { display: none !important; }
+  body { background: #fff; }
+  .dash-bg::before, .dash-bg.has-photo::after, .auth-bg { display: none; }
+}

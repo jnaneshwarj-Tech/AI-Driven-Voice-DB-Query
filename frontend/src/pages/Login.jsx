@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import api from '../services/api';
-import { Database, Lock, User, AlertCircle, Mail } from 'lucide-react';
+import { getUserMessage } from '../services/errors';
+import { Lock, User, AlertCircle, Mail, Eye, EyeOff, CheckCircle2 } from 'lucide-react';
+import { useI18n } from '../context/LanguageContext';
+import AuthShell from '../components/AuthShell';
 
 export default function Login() {
   const [username, setUsername] = useState('');
@@ -17,7 +20,9 @@ export default function Login() {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [secondsLeft, setSecondsLeft] = useState(120);
+  const [showPassword, setShowPassword] = useState(false);
   const navigate = useNavigate();
+  const { t } = useI18n();
 
   useEffect(() => {
     if (!forgotMode || forgotStep !== 'otp') return undefined;
@@ -37,27 +42,27 @@ export default function Login() {
         username,
         password,
       });
-      
+
       localStorage.setItem('token', response.data.access_token);
       localStorage.setItem('role', response.data.user?.role || '');
       localStorage.setItem('username', response.data.user?.username || '');
       if (response.data.user?.theme) {
         localStorage.setItem('theme', response.data.user.theme);
       }
-      
+
       // Force trigger state sync for theme context
       window.dispatchEvent(new Event('storage'));
-      
+
       navigate('/dashboard');
     } catch (err) {
       if (err.response?.status === 401) {
-        setError('Invalid username or password.');
+        setError(t('auth.invalid'));
       } else if (err.response?.status === 422) {
-        setError('Please enter both username and password.');
+        setError(t('auth.needBoth'));
       } else if (err.response) {
-        setError(err.response.data?.detail || 'Login failed. Please try again.');
+        setError(getUserMessage(err, t('auth.loginFailed')));
       } else {
-        setError('Failed to connect to the server. Is the backend running?');
+        setError(t('common.noServer'));
       }
     } finally {
       setLoading(false);
@@ -74,7 +79,7 @@ export default function Login() {
       setMessage(response.data.message);
       setForgotStep('otp');
     } catch (err) {
-      setError(err.response?.data?.detail || 'Unable to request a password reset.');
+      setError(getUserMessage(err, t('auth.requestFailed')));
     } finally {
       setLoading(false);
     }
@@ -90,7 +95,7 @@ export default function Login() {
       setResetToken(response.data.reset_token);
       setForgotStep('password');
     } catch (err) {
-      setError(err.response?.data?.detail || 'Unable to verify OTP.');
+      setError(getUserMessage(err, t('auth.otpFailed')));
     } finally {
       setLoading(false);
     }
@@ -108,136 +113,243 @@ export default function Login() {
       setOtp('');
       setNewPassword('');
       setConfirmPassword('');
-      setMessage('Password reset successful. Please sign in with your new password.');
+      setMessage(t('auth.resetSuccess'));
     } catch (err) {
-      setError(err.response?.data?.detail || 'Unable to reset password.');
+      setError(getUserMessage(err, t('auth.resetFailed')));
     } finally {
       setLoading(false);
     }
   };
 
-  return (
-    <div className="min-h-screen bg-slate-900 flex flex-col justify-center py-12 sm:px-6 lg:px-8 bg-[url('https://images.unsplash.com/photo-1558486012-817176f84c6d?q=80&w=2400&auto=format&fit=crop')] bg-cover bg-center">
-      <div className="absolute inset-0 bg-slate-900/80 backdrop-blur-sm"></div>
-      
-      <div className="relative sm:mx-auto sm:w-full sm:max-w-md z-10">
-        <div className="flex justify-center">
-          <div className="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-500/30">
-            <Database className="w-8 h-8 text-white" />
-          </div>
-        </div>
-        <h2 className="mt-6 text-center text-3xl font-extrabold text-white tracking-tight">
-          AI Database System
-        </h2>
-        <p className="mt-2 text-center text-sm text-slate-300">
-          Sign in to access your college workspace
-        </p>
-      </div>
+  const countdown = `${String(Math.floor(secondsLeft / 60)).padStart(2, '0')}:${String(secondsLeft % 60).padStart(2, '0')}`;
 
-      <div className="relative mt-8 sm:mx-auto sm:w-full sm:max-w-md z-10">
-        <div className="bg-slate-800/50 backdrop-blur-xl py-8 px-4 shadow-2xl sm:rounded-2xl sm:px-10 border border-slate-700">
+  const submitLabel = loading
+    ? t('common.pleaseWait')
+    : forgotStep === 'email'
+      ? t('auth.sendOtp')
+      : forgotStep === 'otp'
+        ? t('auth.verifyOtp')
+        : t('auth.resetPassword');
+
+  return (
+    <AuthShell
+      heading={t('auth.signInHeading')}
+      sub={t('auth.signInSub')}
+      footnote={t('auth.footnote')}
+    >
           {message && (
-            <div className="rounded-lg bg-emerald-500/10 p-4 border border-emerald-500/20 text-emerald-300">
-              <p className="text-sm font-medium">{message}</p>
+            <div
+              role="status"
+              className="mb-5 flex items-start gap-2.5 rounded-md border border-ok/25 bg-ok/10 p-3.5 text-ok"
+            >
+              <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />
+              <p className="text-[13.5px] font-medium leading-snug">{message}</p>
             </div>
           )}
+
           {forgotMode ? (
-            <form className="space-y-6" onSubmit={forgotStep === 'email' ? handleForgotPassword : forgotStep === 'otp' ? handleVerifyOtp : handleResetPassword}>
-              {error && <div className="rounded-lg bg-red-500/10 p-4 border border-red-500/20 flex items-center gap-3 text-red-400"><AlertCircle className="w-5 h-5" /><p className="text-sm font-medium">{error}</p></div>}
-              {forgotStep === 'email' && <>
-                <div>
-                  <label className="block text-sm font-medium text-slate-300">Username</label>
-                  <div className="mt-1 relative"><User className="absolute left-3 top-3 h-5 w-5 text-slate-500" /><input type="text" required value={username} onChange={(e) => setUsername(e.target.value)} className="block w-full pl-10 pr-3 py-2.5 border border-slate-600 rounded-xl bg-slate-900/50 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Your username" /></div>
+            <form
+              className="space-y-5"
+              onSubmit={forgotStep === 'email' ? handleForgotPassword : forgotStep === 'otp' ? handleVerifyOtp : handleResetPassword}
+            >
+              <div>
+                <h2 className="t-section text-ink">{t('auth.resetHeading')}</h2>
+                <p className="t-support mt-1 text-ink-mute">{t('auth.resetSub')}</p>
+              </div>
+
+              {error && (
+                <div role="alert" className="flex items-start gap-2.5 rounded-md border border-err/25 bg-err/10 p-3.5 text-err">
+                  <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />
+                  <p className="text-[13.5px] font-medium leading-snug">{error}</p>
                 </div>
+              )}
+
+              {forgotStep === 'email' && (
+                <>
+                  <div>
+                    <label className="field-label" htmlFor="fp-username">{t('auth.username')}</label>
+                    <div className="relative">
+                      <User className="pointer-events-none absolute left-3 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-ink-faint" aria-hidden="true" />
+                      <input
+                        id="fp-username"
+                        type="text"
+                        required
+                        value={username}
+                        onChange={(e) => setUsername(e.target.value)}
+                        className="input pl-10"
+                        placeholder={t('auth.usernamePlaceholder')}
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="field-label" htmlFor="fp-email">{t('auth.registeredEmail')}</label>
+                    <div className="relative">
+                      <Mail className="pointer-events-none absolute left-3 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-ink-faint" aria-hidden="true" />
+                      <input
+                        id="fp-email"
+                        type="email"
+                        required
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        className="input pl-10"
+                        placeholder={t('auth.emailPlaceholder')}
+                      />
+                    </div>
+                    <p className="t-support mt-1.5 text-ink-mute">{t('auth.emailHelp')}</p>
+                  </div>
+                </>
+              )}
+
+              {forgotStep === 'otp' && (
                 <div>
-                  <label className="block text-sm font-medium text-slate-300">Registered email</label>
-                  <div className="mt-1 relative"><Mail className="absolute left-3 top-3 h-5 w-5 text-slate-500" /><input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="block w-full pl-10 pr-3 py-2.5 border border-slate-600 rounded-xl bg-slate-900/50 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="you@example.com" /></div>
-                  <p className="mt-2 text-xs text-slate-400">Enter the email associated with your username</p>
+                  <label className="field-label" htmlFor="fp-otp">{t('auth.otpLabel')}</label>
+                  <input
+                    id="fp-otp"
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]{6}"
+                    maxLength="6"
+                    required
+                    value={otp}
+                    onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
+                    className="input text-center text-lg tracking-[0.5em]"
+                    placeholder="000000"
+                  />
+                  <p className="t-support mt-1.5 text-ink-mute">{t('auth.otpExpires', { time: countdown })}</p>
                 </div>
-              </>}
-              {forgotStep === 'otp' && <div>
-                <label className="block text-sm font-medium text-slate-300">Enter the OTP sent to your email</label>
-                <input type="text" inputMode="numeric" pattern="[0-9]{6}" maxLength="6" required value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} className="mt-1 block w-full px-3 py-2.5 text-center tracking-[0.5em] border border-slate-600 rounded-xl bg-slate-900/50 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="000000" />
-                <p className="mt-2 text-sm text-slate-400">OTP expires in {String(Math.floor(secondsLeft / 60)).padStart(2, '0')}:{String(secondsLeft % 60).padStart(2, '0')}</p>
-              </div>}
-              {forgotStep === 'password' && <>
-                <div><label className="block text-sm font-medium text-slate-300">New password</label><input type="password" minLength="6" required value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="mt-1 block w-full px-3 py-2.5 border border-slate-600 rounded-xl bg-slate-900/50 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500" /></div>
-                <div><label className="block text-sm font-medium text-slate-300">Confirm new password</label><input type="password" minLength="6" required value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} className="mt-1 block w-full px-3 py-2.5 border border-slate-600 rounded-xl bg-slate-900/50 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500" /></div>
-              </>}
-              <button type="submit" disabled={loading} className="w-full py-2.5 px-4 rounded-xl text-sm font-semibold text-white bg-blue-600 hover:bg-blue-500 disabled:opacity-50">
-                {loading ? 'Please wait...' : forgotStep === 'email' ? 'Send OTP' : forgotStep === 'otp' ? 'Verify OTP' : 'Reset password'}
+              )}
+
+              {forgotStep === 'password' && (
+                <>
+                  <div>
+                    <label className="field-label" htmlFor="fp-new">{t('auth.newPassword')}</label>
+                    <input
+                      id="fp-new"
+                      type={showPassword ? 'text' : 'password'}
+                      minLength="6"
+                      required
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      className="input"
+                    />
+                  </div>
+                  <div>
+                    <label className="field-label" htmlFor="fp-confirm">{t('auth.confirmPassword')}</label>
+                    <input
+                      id="fp-confirm"
+                      type={showPassword ? 'text' : 'password'}
+                      minLength="6"
+                      required
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      className="input"
+                    />
+                  </div>
+                </>
+              )}
+
+              <button type="submit" disabled={loading} className="btn btn-accent w-full btn-lg">
+                {loading && <Spinner />}
+                {submitLabel}
               </button>
-              {forgotStep === 'otp' && <button type="button" onClick={handleForgotPassword} disabled={loading} className="w-full text-sm font-medium text-blue-400 hover:text-blue-300">Resend OTP</button>}
-              <button type="button" onClick={() => { setForgotMode(false); setError(''); setMessage(''); }} className="w-full text-sm font-medium text-blue-400 hover:text-blue-300">Back to sign in</button>
+
+              {forgotStep === 'otp' && (
+                <button type="button" onClick={handleForgotPassword} disabled={loading} className="btn btn-ghost w-full btn-sm">
+                  {t('auth.resendOtp')}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => { setForgotMode(false); setError(''); setMessage(''); }}
+                className="btn btn-ghost w-full btn-sm"
+              >
+                {t('auth.backToSignIn')}
+              </button>
             </form>
           ) : (
-          <form className="space-y-6" onSubmit={handleLogin}>
-            {error && (
-              <div className="rounded-lg bg-red-500/10 p-4 border border-red-500/20 flex items-center gap-3 text-red-400">
-                <AlertCircle className="w-5 h-5 flex-shrink-0" />
-                <p className="text-sm font-medium">{error}</p>
-              </div>
-            )}
-
-            <div>
-              <label className="block text-sm font-medium text-slate-300">Username</label>
-              <div className="mt-1 relative rounded-md shadow-sm">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <User className="h-5 w-5 text-slate-500" />
+            <form className="space-y-5" onSubmit={handleLogin}>
+              {error && (
+                <div role="alert" className="flex items-start gap-2.5 rounded-md border border-err/25 bg-err/10 p-3.5 text-err">
+                  <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />
+                  <p className="text-[13.5px] font-medium leading-snug">{error}</p>
                 </div>
-                <input
-                  type="text"
-                  required
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  className="block w-full pl-10 pr-3 py-2.5 border border-slate-600 rounded-xl leading-5 bg-slate-900/50 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all sm:text-sm"
-                  placeholder="Enter your registered username"
-                />
-              </div>
-            </div>
+              )}
 
-            <div>
-              <label className="block text-sm font-medium text-slate-300">Password</label>
-              <div className="mt-1 relative rounded-md shadow-sm">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Lock className="h-5 w-5 text-slate-500" />
+              <div>
+                <label className="field-label" htmlFor="login-username">{t('auth.username')}</label>
+                <div className="relative">
+                  <User className="pointer-events-none absolute left-3 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-ink-faint" aria-hidden="true" />
+                  <input
+                    id="login-username"
+                    type="text"
+                    required
+                    autoComplete="username"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    className="input pl-10"
+                    placeholder={t('auth.usernamePlaceholder')}
+                  />
                 </div>
-                <input
-                  type="password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="block w-full pl-10 pr-3 py-2.5 border border-slate-600 rounded-xl leading-5 bg-slate-900/50 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all sm:text-sm"
-                  placeholder="••••••••"
-                />
               </div>
-              <button type="button" onClick={() => { setForgotMode(true); setError(''); setMessage(''); }} className="mt-2 text-sm font-medium text-blue-400 hover:text-blue-300">Forgot password?</button>
-            </div>
 
-            <div>
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full flex justify-center py-2.5 px-4 border border-transparent rounded-xl shadow-lg text-sm font-semibold text-white bg-blue-600 hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-600 focus:ring-offset-slate-900 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {loading ? (
-                  <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                ) : 'Sign in'}
+              <div>
+                <div className="flex items-baseline justify-between gap-3">
+                  <label className="field-label mb-0" htmlFor="login-password">{t('auth.password')}</label>
+                  <button
+                    type="button"
+                    onClick={() => { setForgotMode(true); setError(''); setMessage(''); }}
+                    className="text-[13px] font-medium text-brand-fg hover:text-brand-fg hover:underline dark:text-info"
+                  >
+                    {t('auth.forgot')}
+                  </button>
+                </div>
+                <div className="relative mt-1.5">
+                  <Lock className="pointer-events-none absolute left-3 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-ink-faint" aria-hidden="true" />
+                  <input
+                    id="login-password"
+                    type={showPassword ? 'text' : 'password'}
+                    required
+                    autoComplete="current-password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="input pl-10 pr-11"
+                    placeholder="••••••••"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-ink-faint hover:text-ink-soft"
+                    title={showPassword ? t('auth.hidePassword') : t('auth.showPassword')}
+                  >
+                    {showPassword ? <EyeOff className="h-4 w-4" aria-hidden="true" /> : <Eye className="h-4 w-4" aria-hidden="true" />}
+                    <span className="sr-only">{showPassword ? t('auth.hidePassword') : t('auth.showPassword')}</span>
+                  </button>
+                </div>
+              </div>
+
+              <button type="submit" disabled={loading} className="btn btn-primary w-full btn-lg">
+                {loading ? <Spinner /> : null}
+                {loading ? t('common.pleaseWait') : t('auth.signIn')}
               </button>
-            </div>
-            
-            <div className="mt-4 text-center">
-              <Link to="/register" className="text-sm font-medium text-blue-400 hover:text-blue-300">
-                Register
-              </Link>
-            </div>
-          </form>
+
+              {/* §8: registration sits below the sign-in action. */}
+              <div className="border-t border-line pt-4 text-center">
+                <span className="t-support text-ink-mute">{t('auth.noAccount')}&nbsp;</span>
+                <Link to="/register" className="text-[14px] font-semibold text-brand-fg hover:underline dark:text-info">
+                  {t('auth.registerLink')}
+                </Link>
+              </div>
+            </form>
           )}
-        </div>
-      </div>
-    </div>
+    </AuthShell>
+  );
+}
+
+function Spinner() {
+  return (
+    <svg className="-ml-1 h-4 w-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+    </svg>
   );
 }
